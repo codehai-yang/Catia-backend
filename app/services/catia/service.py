@@ -1,3 +1,4 @@
+import math
 import tempfile
 import threading
 from pathlib import Path
@@ -8,12 +9,83 @@ from app.core.status_code import StatusCode
 from win32com.client import GetActiveObject
 from pycatia.mec_mod_interfaces.part_document import PartDocument
 from pycatia.space_analyses_interfaces.spa_workbench import SPAWorkbench
+from pycatia.product_structure_interfaces.product import Product
+from pycatia.product_structure_interfaces.product_document import ProductDocument
 from app.utils.step_to_gltf import step_to_gltf
 
 class CatiaError(RuntimeError):
     def __init__(self, code: int, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _components_to_matrix(components: Any) -> list[list[float]]:
+    """把 Position.GetComponents 的 12 个分量转成 4x4 行主序变换矩阵。"""
+    return [
+        [components[0], components[1], components[2], components[9]],
+        [components[3], components[4], components[5], components[10]],
+        [components[6], components[7], components[8], components[11]],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _identity_matrix() -> list[list[float]]:
+    return [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _matmul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    return [
+        [sum(a[i][k] * b[k][j] for k in range(4)) for j in range(4)]
+        for i in range(4)
+    ]
+
+
+def _fmt_xyz(x: float, y: float, z: float) -> str:
+    return f"{x:.6f}, {y:.6f}, {z:.6f}"
+
+
+def _matrix_to_quaternion(m: list[list[float]]) -> tuple[float, float, float, float]:
+    """把 3x3 旋转矩阵转为四元数 (x, y, z, w)。"""
+    m00, m01, m02 = m[0][0], m[0][1], m[0][2]
+    m10, m11, m12 = m[1][0], m[1][1], m[1][2]
+    m20, m21, m22 = m[2][0], m[2][1], m[2][2]
+
+    trace = m00 + m11 + m22
+    if trace > 0:
+        s = math.sqrt(trace + 1.0) * 2.0
+        w = 0.25 * s
+        x = (m21 - m12) / s
+        y = (m02 - m20) / s
+        z = (m10 - m01) / s
+    elif m00 > m11 and m00 > m22:
+        s = math.sqrt(1.0 + m00 - m11 - m22) * 2.0
+        w = (m21 - m12) / s
+        x = 0.25 * s
+        y = (m01 + m10) / s
+        z = (m02 + m20) / s
+    elif m11 > m22:
+        s = math.sqrt(1.0 + m11 - m00 - m22) * 2.0
+        w = (m02 - m20) / s
+        x = (m01 + m10) / s
+        y = 0.25 * s
+        z = (m12 + m21) / s
+    else:
+        s = math.sqrt(1.0 + m22 - m00 - m11) * 2.0
+        w = (m10 - m01) / s
+        x = (m02 + m20) / s
+        y = (m12 + m21) / s
+        z = 0.25 * s
+    return (x, y, z, w)
+
+
+def _fmt_rotation(m: list[list[float]]) -> str:
+    x, y, z, w = _matrix_to_quaternion(m)
+    return f"{x:.6f}, {y:.6f}, {z:.6f}, {w:.6f}"
 
 
 class CatiaService:
@@ -130,3 +202,43 @@ class CatiaService:
             part_doc.export_data(step_path, "stp", overwrite=True)
             step_to_gltf(str(step_path), str(glb_path))
             return glb_path.read_bytes()
+
+    # 获取零件位置（递归装配体结构树，返回每个节点的局部/全局位置与旋转）
+    def list_position(self, fullName: str) -> list[dict[str, Any]]:
+        app = self._connect()
+        documents = app.Documents
+
+        doc = None
+        for i in range(1, documents.Count + 1):
+            candidate = documents.Item(i)
+            if candidate.FullName == fullName:
+                doc = candidate
+                break
+        if doc is None:
+            raise CatiaError(
+                StatusCode.VALIDATION_ERROR, f"Document not open: {fullName}"
+            )
+
+        root = ProductDocument(doc).product
+        results: list[dict[str, Any]] = []
+
+        def walk(product: Product, parent_matrix: list[list[float]], parent_name: str) -> None:
+            components = product.position.get_components()
+            global_matrix = _matmul(parent_matrix, _components_to_matrix(components))
+
+            results.append({
+                "name": product.name,
+                "localPosition": _fmt_xyz(components[9], components[10], components[11]),
+                "globalPosition": _fmt_xyz(global_matrix[0][3], global_matrix[1][3], global_matrix[2][3]),
+                "globalRotation": _fmt_rotation(global_matrix),
+                "parentName": parent_name,
+            })
+
+            for child in product.get_children():
+                walk(child, global_matrix, product.name)
+
+        # 从根下第一层开始，根（用户传入的装配体本身）不作为条目返回
+        for child in root.get_children():
+            walk(child, _identity_matrix(), root.name)
+
+        return results

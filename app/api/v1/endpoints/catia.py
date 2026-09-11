@@ -31,3 +31,8 @@ def get_gltf(fullName: str = Body(...)) -> Response:
         media_type="model/gltf-binary",
         headers={"Content-Disposition": f'attachment; filename="{Path(fullName).stem}.glb"'},
     )
+
+#获取零件位置
+@router.post("/getposition")
+def get_position(fullName: str = Body(...)) -> Response:
+    return ApiResponse(data=catia_service.list_position(fullName))
