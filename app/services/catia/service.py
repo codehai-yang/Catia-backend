@@ -193,20 +193,29 @@ class CatiaService:
 
         selected = selection.Item2(1)
         instance_name: str = selected.LeafProduct.Name or "selected"
+        val = selected.Value
 
-        # 诊断：确认选中的到底是什么对象
+        # 区分两种选中：
+        #  - 独立零件实例（目录树/卡扣等）→ 有引用文档，直接导出该引用文档
+        #  - 装配内纯几何（线束分支）→ 无独立引用文档，用复制粘贴隔离后再导出
         try:
-            val = selected.Value
-            logger.info(
-                "selected.Value={!r} type={} name={}",
-                val, type(val), getattr(val, "Name", None),
-            )
-        except Exception as exc:
-            logger.warning("cannot read selected.Value: {}", exc)
+            ref_doc = val.ReferenceProduct.Parent
+            is_product = True
+        except Exception:
+            ref_doc = None
+            is_product = False
+        logger.info("is_product={} instance_name={}", is_product, instance_name)
 
-        # 把选中的几何复制到剪贴板，再粘贴进一个临时新建的空 Part
+        if is_product:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                step_path = Path(tmp_dir) / f"{instance_name}.stp"
+                glb_path = Path(tmp_dir) / f"{instance_name}.glb"
+                ref_doc.ExportData(str(step_path), "stp")
+                step_to_gltf(str(step_path), str(glb_path))
+                return glb_path.read_bytes(), instance_name
+
+        # 几何元素：复制粘贴到一个临时空 Part 再导出
         selection.Copy()
-
         documents = app.Documents
         new_doc = documents.Add("Part")
         try:
@@ -225,12 +234,11 @@ class CatiaService:
                 if step_size < 2000:
                     raise CatiaError(
                         StatusCode.VALIDATION_ERROR,
-                        f"导出的 STEP 仅有 {step_size} 字节，选中的线束分支未生成可导出的实体几何",
+                        f"导出的 STEP 仅有 {step_size} 字节，选中对象未生成可导出的实体几何",
                     )
                 step_to_gltf(str(step_path), str(glb_path))
                 return glb_path.read_bytes(), instance_name
         finally:
-            # 关闭临时文档，抑制"是否保存"弹窗
             try:
                 app.DisplayFileAlerts = False
                 new_doc.Close()
