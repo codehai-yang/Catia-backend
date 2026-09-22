@@ -1,10 +1,9 @@
-from pathlib import Path
-
 from fastapi import APIRouter
 from fastapi.params import Body
 from fastapi.responses import Response
+from urllib.parse import quote
 from pycatia.mec_mod_interfaces import body
-from app.schemas.catia import PartItem
+from app.schemas.catia import PartItem, SelectedPart, SelectedParts
 from app.schemas.common import ApiResponse
 from app.services.catia.service import CatiaService
 
@@ -22,17 +21,28 @@ def list_parts() -> ApiResponse[list[PartItem]]:
 def select_part(partName: str = Body(...)) -> ApiResponse[list[PartItem]]:
     return ApiResponse(data=catia_service.select_part(partName))
 
-#获取glTF/GLB文件
+#获取glTF/GLB文件（当前选中的零件实例）
 @router.post("/getglb")
-def get_gltf(fullName: str = Body(...)) -> Response:
-    data = catia_service.get_glb(fullName)
+def get_gltf() -> Response:
+    data, name = catia_service.get_glb()
+    filename = f"{name}.glb"
     return Response(
         content=data,
         media_type="model/gltf-binary",
-        headers={"Content-Disposition": f'attachment; filename="{Path(fullName).stem}.glb"'},
+        headers={
+            "Content-Disposition": (
+                f"attachment; filename=\"part.glb\"; "
+                f"filename*=UTF-8''{quote(filename)}"
+            )
+        },
     )
 
 #获取零件位置
 @router.post("/getposition")
 def get_position(fullName: str = Body(...)) -> Response:
     return ApiResponse(data=catia_service.list_position(fullName))
+
+# 获取当前选中的零件实例名称及总长度
+@router.post("/getselected", response_model=ApiResponse[SelectedParts])
+def get_selected() -> ApiResponse[SelectedParts]:
+    return ApiResponse(data=catia_service.get_selected_instances())

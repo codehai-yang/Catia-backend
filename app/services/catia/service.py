@@ -11,6 +11,7 @@ from pycatia.mec_mod_interfaces.part_document import PartDocument
 from pycatia.space_analyses_interfaces.spa_workbench import SPAWorkbench
 from pycatia.product_structure_interfaces.product import Product
 from pycatia.product_structure_interfaces.product_document import ProductDocument
+from pycatia.in_interfaces.selected_element import SelectedElement
 from app.utils.step_to_gltf import step_to_gltf
 
 class CatiaError(RuntimeError):
@@ -176,32 +177,64 @@ class CatiaService:
                 return parts
         return []
 
-    # 获取glTF文件
-    def get_glb(self, fullName: str) -> bytes:
+    # 获取glTF文件：导出当前在 CATIA 中选中的单个几何/零件（而非其父级文档）
+    def get_glb(self) -> tuple[bytes, str]:
         app = self._connect()
-        documents = app.Documents
-        # 按 fullName 定位已打开的文档
-        doc = None
-        for i in range(1, documents.Count + 1):
-            candidate = documents.Item(i)
-            if candidate.FullName == fullName:
-                doc = candidate
-                break
-        if doc is None:
+        document = app.ActiveDocument
+        if document is None:
+            raise CatiaError(StatusCode.VALIDATION_ERROR, "No active CATIA document")
+
+        selection = document.Selection
+        if selection.Count2 != 1:
             raise CatiaError(
-                StatusCode.VALIDATION_ERROR, f"Document not open: {fullName}"
+                StatusCode.VALIDATION_ERROR, "请在 CATIA 中只选中一个零件/分支"
             )
 
-        part_doc = PartDocument(doc)
+        selected = selection.Item2(1)
+        instance_name: str = selected.LeafProduct.Name or "selected"
 
-        # 导出 STEP 转成 GLB，都放在临时目录，返回后自动清理
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            stem = Path(fullName).stem
-            step_path = Path(tmp_dir) / f"{stem}.stp"
-            glb_path = Path(tmp_dir) / f"{stem}.glb"
-            part_doc.export_data(step_path, "stp", overwrite=True)
-            step_to_gltf(str(step_path), str(glb_path))
-            return glb_path.read_bytes()
+        # 诊断：确认选中的到底是什么对象
+        try:
+            val = selected.Value
+            logger.info(
+                "selected.Value={!r} type={} name={}",
+                val, type(val), getattr(val, "Name", None),
+            )
+        except Exception as exc:
+            logger.warning("cannot read selected.Value: {}", exc)
+
+        # 把选中的几何复制到剪贴板，再粘贴进一个临时新建的空 Part
+        selection.Copy()
+
+        documents = app.Documents
+        new_doc = documents.Add("Part")
+        try:
+            part_doc = PartDocument(new_doc)
+            part = part_doc.part
+            new_selection = new_doc.Selection
+            new_selection.Add(part.main_body.com_object)
+            new_selection.PasteSpecial("CATPrtResultWithOutLink")
+
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                step_path = Path(tmp_dir) / f"{instance_name}.stp"
+                glb_path = Path(tmp_dir) / f"{instance_name}.glb"
+                part_doc.export_data(str(step_path), "stp", overwrite=True)
+                step_size = step_path.stat().st_size
+                logger.info("exported STEP size = {} bytes", step_size)
+                if step_size < 2000:
+                    raise CatiaError(
+                        StatusCode.VALIDATION_ERROR,
+                        f"导出的 STEP 仅有 {step_size} 字节，选中的线束分支未生成可导出的实体几何",
+                    )
+                step_to_gltf(str(step_path), str(glb_path))
+                return glb_path.read_bytes(), instance_name
+        finally:
+            # 关闭临时文档，抑制"是否保存"弹窗
+            try:
+                app.DisplayFileAlerts = False
+                new_doc.Close()
+            finally:
+                app.DisplayFileAlerts = True
 
     # 获取零件位置（递归装配体结构树，返回每个节点的局部/全局位置与旋转）
     def list_position(self, fullName: str) -> list[dict[str, Any]]:
@@ -242,3 +275,55 @@ class CatiaService:
             walk(child, _identity_matrix(), root.name)
 
         return results
+
+    # 获取当前在 CATIA 中选中的零件实例名称及其总长度
+    def get_selected_instances(self) -> dict[str, Any]:
+        app = self._connect()
+        document = app.ActiveDocument
+        if document is None:
+            raise CatiaError(StatusCode.VALIDATION_ERROR, "No active CATIA document")
+
+        selection = document.Selection
+        spa = SPAWorkbench(document)
+
+        # 根总成实例名称（活动文档为装配体时取根 Product 名，否则回退到文档名）
+        try:
+            assembly_name = ProductDocument(document).product.name
+        except Exception:
+            assembly_name = document.Name
+
+        # 同名实例只保留一条，长度累加得到总长度
+        lengths: dict[str, float | None] = {}
+        order: list[str] = []
+        for i in range(1, selection.Count2 + 1):
+            try:
+                selected = SelectedElement(selection.Item2(i))
+                name = selected.leaf_product.name
+            except Exception as exc:
+                logger.warning("failed to read selection {}: {}", i, exc)
+                continue
+            if not name or name == "InvalidLeafProduct":
+                continue
+            if name not in lengths:
+                lengths[name] = None
+                order.append(name)
+            try:
+                length = float(spa.get_measurable(selected.reference).length)
+                lengths[name] = (lengths[name] or 0.0) + length
+            except Exception as exc:
+                logger.warning("failed to measure length for {}: {}", name, exc)
+
+        results: list[dict[str, Any]] = []
+        for name in order:
+            length = lengths[name]
+            results.append({
+                "name": name,
+                "length": round(length, 3) if length is not None else None,
+            })
+        # 总成实例总长度 = 所有选中零件长度之和（测不出的项不计入）
+        total_length = sum(l for l in lengths.values() if l is not None)
+        return {
+            "assemblyName": assembly_name,
+            "totalLength": round(total_length, 3),
+            "parts": results,
+        }
