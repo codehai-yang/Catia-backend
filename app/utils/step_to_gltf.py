@@ -10,6 +10,10 @@ from OCC.Core.TColStd import TColStd_IndexedDataMapOfStringString
 from OCC.Core.RWGltf import RWGltf_CafWriter
 from OCC.Core.IFSelect import IFSelect_RetDone
 from OCC.Core.Message import Message_ProgressRange
+from OCC.Core.gp import gp_Trsf
+from OCC.Core.BRep import BRep_Builder
+from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
+from OCC.Core.TopoDS import TopoDS_Compound
 
 def step_to_gltf(in_file: str, out_file: str, lin_def: float = 0.1, ang_def: float = 0.5):
     """
@@ -51,3 +55,53 @@ def step_to_gltf(in_file: str, out_file: str, lin_def: float = 0.1, ang_def: flo
     else:
         print("转换失败！")
         sys.exit(1)
+
+
+def _matrix_to_trsf(m):
+    """把 4x4 行主序变换矩阵转成 gp_Trsf（忽略缩放）。"""
+    trsf = gp_Trsf()
+    trsf.SetValues(
+        m[0][0], m[0][1], m[0][2], m[0][3],
+        m[1][0], m[1][1], m[1][2], m[1][3],
+        m[2][0], m[2][1], m[2][2], m[2][3],
+    )
+    return trsf
+
+
+def steps_to_gltf(entries, out_file, lin_def: float = 0.1, ang_def: float = 0.5):
+    """
+    读取多个 STEP 文件，各自应用变换矩阵后合并写成一个 glTF/GLB。
+
+    参数:
+        entries: [(step_path, matrix_or_None), ...]，matrix 为 4x4 行主序（局部->全局）
+        out_file: 输出 glTF/GLB 路径
+        lin_def: 线性偏差
+        ang_def: 角度偏差
+    """
+    builder = BRep_Builder()
+    compound = TopoDS_Compound()
+    builder.MakeCompound(compound)
+
+    for step_path, matrix in entries:
+        shape = read_step_file(str(step_path))
+        if matrix is not None:
+            trsf = _matrix_to_trsf(matrix)
+            shape = BRepBuilderAPI_Transform(shape, trsf, True).Shape()
+        builder.Add(compound, shape)
+
+    breptools.Clean(compound)
+    BRepMesh_IncrementalMesh(compound, lin_def, False, ang_def, True).Perform()
+
+    doc = TDocStd_Document("doc")
+    XCAFDoc_DocumentTool.ShapeTool(doc.Main()).AddShape(compound)
+
+    info = TColStd_IndexedDataMapOfStringString()
+    info.Add(TCollection_AsciiString("Generator"),
+             TCollection_AsciiString("step_to_gltf.py"))
+
+    is_binary = Path(out_file).suffix.lower() == ".glb"
+    writer = RWGltf_CafWriter(str(out_file), is_binary)
+    result = writer.Perform(doc, info, Message_ProgressRange())
+
+    if result != IFSelect_RetDone:
+        raise RuntimeError(f"glTF 转换失败: {out_file}")

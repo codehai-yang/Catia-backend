@@ -21,10 +21,10 @@ def list_parts() -> ApiResponse[list[PartItem]]:
 def select_part(partName: str = Body(...)) -> ApiResponse[list[PartItem]]:
     return ApiResponse(data=catia_service.select_part(partName))
 
-#获取glTF/GLB文件（当前选中的零件实例）
+#获取glTF/GLB文件（当前选中项中的第 index 个，默认第 1 个）
 @router.post("/getglb")
-def get_gltf() -> Response:
-    data, name = catia_service.get_glb()
+def get_gltf(index: int = Body(1)) -> Response:
+    data, name = catia_service.get_glb(index=index)
     filename = f"{name}.glb"
     return Response(
         content=data,
@@ -46,3 +46,4 @@ def get_position(fullName: str = Body(...)) -> Response:
 @router.post("/getselected", response_model=ApiResponse[SelectedParts])
 def get_selected() -> ApiResponse[SelectedParts]:
     return ApiResponse(data=catia_service.get_selected_instances())
+

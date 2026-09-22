@@ -12,7 +12,7 @@ from pycatia.space_analyses_interfaces.spa_workbench import SPAWorkbench
 from pycatia.product_structure_interfaces.product import Product
 from pycatia.product_structure_interfaces.product_document import ProductDocument
 from pycatia.in_interfaces.selected_element import SelectedElement
-from app.utils.step_to_gltf import step_to_gltf
+from app.utils.step_to_gltf import step_to_gltf, steps_to_gltf
 
 class CatiaError(RuntimeError):
     def __init__(self, code: int, message: str) -> None:
@@ -177,8 +177,8 @@ class CatiaService:
                 return parts
         return []
 
-    # 获取glTF文件：导出当前在 CATIA 中选中的单个几何/零件（而非其父级文档）
-    def get_glb(self) -> tuple[bytes, str]:
+    # 获取glTF文件：导出当前选中项中的第 index 个（默认第 1 个）的数模，而非其父级文档
+    def get_glb(self, index: int = 1) -> tuple[bytes, str]:
         app = self._connect()
         document = app.ActiveDocument
         if document is None:
@@ -190,60 +190,103 @@ class CatiaService:
             raise CatiaError(
                 StatusCode.VALIDATION_ERROR, "请先在 CATIA 中选中至少一个零件/分支"
             )
+        if index < 1 or index > count:
+            raise CatiaError(
+                StatusCode.VALIDATION_ERROR,
+                f"选中项索引 {index} 需在 1..{count} 之间",
+            )
 
-        selected = selection.Item2(1)
+        selected = selection.Item2(index)
         instance_name: str = selected.LeafProduct.Name or "selected"
         val = selected.Value
 
-        # 区分两种选中：
-        #  - 独立零件实例（目录树/卡扣等）→ 有引用文档，直接导出该引用文档
-        #  - 装配内纯几何（线束分支）→ 无独立引用文档，用复制粘贴隔离后再导出
+        # 首选：递归收集选中 Product 子树下所有引用 CATPart 的叶子实例，逐个导出其
+        # 引用文档的 STEP，再按各自实例位姿合成一个 GLB。这样既不会带上整个线束文档，
+        # 也能正确处理「卡扣装配」这类子装配（其自身无实体，实体都在叶子 CATPart 里）。
+        try:
+            leaf_product = Product(selected.LeafProduct)
+            instances = self._collect_part_transforms(leaf_product, _identity_matrix())
+        except Exception as exc:
+            logger.info("index={} failed to collect part instances: {}", index, exc)
+            instances = []
+        if instances:
+            logger.info("index={} exporting {} leaf part instance(s)", index, len(instances))
+            return self._export_instances_to_glb(instances, instance_name)
+
+        # 回退：独立零件实例（有独立 .CATPart 引用文档）直接导出该引用文档，只会包含这一个零件
         try:
             ref_doc = val.ReferenceProduct.Parent
-            is_product = True
         except Exception:
             ref_doc = None
-            is_product = False
-        logger.info("is_product={} instance_name={}", is_product, instance_name)
+        if ref_doc is not None and self._is_part_document(ref_doc):
+            logger.info(
+                "index={} fallback export ref doc Name={} FullName={}",
+                index,
+                getattr(ref_doc, "Name", None),
+                getattr(ref_doc, "FullName", None),
+            )
+            return self._export_reference_to_glb(ref_doc, instance_name)
 
-        if is_product:
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                step_path = Path(tmp_dir) / f"{instance_name}.stp"
-                glb_path = Path(tmp_dir) / f"{instance_name}.glb"
-                ref_doc.ExportData(str(step_path), "stp")
-                step_to_gltf(str(step_path), str(glb_path))
-                return glb_path.read_bytes(), instance_name
+        raise CatiaError(StatusCode.VALIDATION_ERROR, f"无法导出选中对象 {instance_name}")
 
-        # 几何元素：复制粘贴到一个临时空 Part 再导出
-        selection.Copy()
-        documents = app.Documents
-        new_doc = documents.Add("Part")
+    # 独立零件实例：直接导出其引用文档
+    def _export_reference_to_glb(self, ref_doc: Any, name: str) -> tuple[bytes, str]:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            step_path = Path(tmp_dir) / f"{name}.stp"
+            glb_path = Path(tmp_dir) / f"{name}.glb"
+            ref_doc.ExportData(str(step_path), "stp")
+            step_to_gltf(str(step_path), str(glb_path))
+            return glb_path.read_bytes(), name
+
+    # 递归收集 Product 子树下所有引用 CATPart 的叶子实例及其全局位姿矩阵
+    def _collect_part_transforms(
+        self, product: Any, parent_matrix: list[list[float]]
+    ) -> list[tuple[list[list[float]], Any]]:
         try:
-            part_doc = PartDocument(new_doc)
-            part = part_doc.part
-            new_selection = new_doc.Selection
-            new_selection.Add(part.main_body.com_object)
-            new_selection.PasteSpecial("CATPrtResultWithOutLink")
+            own = _components_to_matrix(product.position.get_components())
+        except Exception:
+            own = _identity_matrix()
+        global_matrix = _matmul(parent_matrix, own)
+        try:
+            children = product.get_children()
+        except Exception:
+            children = []
+        if not children:
+            return [(global_matrix, product)] if self._is_part_instance(product) else []
+        result: list[tuple[list[list[float]], Any]] = []
+        for child in children:
+            result.extend(self._collect_part_transforms(child, global_matrix))
+        return result
 
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                step_path = Path(tmp_dir) / f"{instance_name}.stp"
-                glb_path = Path(tmp_dir) / f"{instance_name}.glb"
-                part_doc.export_data(str(step_path), "stp", overwrite=True)
-                step_size = step_path.stat().st_size
-                logger.info("exported STEP size = {} bytes", step_size)
-                if step_size < 2000:
-                    raise CatiaError(
-                        StatusCode.VALIDATION_ERROR,
-                        f"导出的 STEP 仅有 {step_size} 字节，选中对象未生成可导出的实体几何",
-                    )
-                step_to_gltf(str(step_path), str(glb_path))
-                return glb_path.read_bytes(), instance_name
-        finally:
-            try:
-                app.DisplayFileAlerts = False
-                new_doc.Close()
-            finally:
-                app.DisplayFileAlerts = True
+    @staticmethod
+    def _is_part_instance(product: Any) -> bool:
+        # 实例引用的是 CATPart 文档（叶子零件），而非 CATProduct 子装配
+        try:
+            return bool(product.is_catpart())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _is_part_document(doc: Any) -> bool:
+        try:
+            return str(doc.Name).lower().endswith(".catpart")
+        except Exception:
+            return False
+
+    # 逐个导出叶子零件引用文档的 STEP，按各自实例位姿合成为一个 GLB
+    def _export_instances_to_glb(
+        self, instances: list[tuple[list[list[float]], Any]], name: str
+    ) -> tuple[bytes, str]:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            entries: list[tuple[str, list[list[float]]]] = []
+            for i, (matrix, inst) in enumerate(instances):
+                ref_doc = inst.com_object.ReferenceProduct.Parent
+                step_path = Path(tmp_dir) / f"part_{i}.stp"
+                ref_doc.ExportData(str(step_path), "stp")
+                entries.append((str(step_path), matrix))
+            glb_path = Path(tmp_dir) / f"{name}.glb"
+            steps_to_gltf(entries, str(glb_path))
+            return glb_path.read_bytes(), name
 
     # 获取零件位置（递归装配体结构树，返回每个节点的局部/全局位置与旋转）
     def list_position(self, fullName: str) -> list[dict[str, Any]]:
@@ -336,3 +379,5 @@ class CatiaService:
             "totalLength": round(total_length, 3),
             "parts": results,
         }
+
+    
