@@ -185,9 +185,10 @@ class CatiaService:
             raise CatiaError(StatusCode.VALIDATION_ERROR, "No active CATIA document")
 
         selection = document.Selection
-        if selection.Count2 != 1:
+        count = selection.Count2
+        if count < 1:
             raise CatiaError(
-                StatusCode.VALIDATION_ERROR, "请在 CATIA 中只选中一个零件/分支"
+                StatusCode.VALIDATION_ERROR, "请先在 CATIA 中选中至少一个零件/分支"
             )
 
         selected = selection.Item2(1)
