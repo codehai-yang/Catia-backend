@@ -41,4 +41,7 @@ class GlbNode(BaseModel):
 class GlbPayload(BaseModel):
     filename: str
     parts: list[GlbNode] = []
+    # 本次实际只导出了哪些分支（1 起的分支序号）。线束这类「多个分支装在同一个
+    # CATPart 里」的零件，后端会按分支裁剪；为空表示导出的是整个零件。
+    branches: list[int] = []
     glb: str                # GLB 文件内容的 base64 编码，前端解码后加载

@@ -36,11 +36,12 @@ def select_part(partName: str = Body(...)) -> ApiResponse[list[PartItem]]:
     summary="Export GLB of the selected item, with part instance names",
 )
 def get_gltf(index: int = Body(1)) -> ApiResponse[GlbPayload]:
-    data, name, parts = catia_service.get_glb(index=index)
+    data, name, parts, branches = catia_service.get_glb(index=index)
     return ApiResponse(
         data=GlbPayload(
             filename=f"{name}.glb",
             parts=[GlbNode(**part) for part in parts],
+            branches=branches,
             glb=base64.b64encode(data).decode("ascii"),
         )
     )
