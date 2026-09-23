@@ -7,15 +7,19 @@
 
 ## glTF/GLB 导出约定（重要）
 - **`/getglb` 返回 JSON**（`ApiResponse[GlbPayload]`），data =
-  `{filename, parts:[{id,instanceName,partNumber}], branches:[int], glb: base64}`。
+  `{filename, parts:[{id,instanceName,branch,partNumber}], branches:[int], glb: base64}`。
   前端先拿 `parts[].id` 拿到唯一标识，再 base64 解码 `data.glb` 加载模型。**不再是二进制流**。
-- GLB 里**每个零件必须是独立的 glTF 节点**，`node.name` = CATIA 零件实例名
-  （`Product.Name`，形如 `Bracket.1`）。`parts[].id` 与该节点名一致，前端据此在数模上按实例名高亮。
-- 该标识与 `/getselected` 返回的 `parts[].name` **同源**（都来自 `Product.Name`），必须保持一致。
-- **不要**把多个零件合并进一个 `TopoDS_Compound` 再整体 `AddShape`——那样 GLB 只有一个节点、
-  没有名字，前端无法定位单个零件。
-- **线束分支裁剪**：`branches` 非空时，后端只把选中的分支几何写进 GLB（节点名仍是实例名，
-  契约不变）；为空表示导出整个零件。裁剪由 `step_to_gltf.select_branch_geometry()` 完成。
+- GLB 里**每个可高亮单元必须是独立的 glTF 节点**，`node.name` 即 `parts[].id`，必须一致。
+  - 普通零件：`node.name` = CATIA 零件实例名（`Product.Name`，形如 `Bracket.1`），`branch=None`。
+  - 线束分支：**每根分支单独一个节点**，`node.name` = `父实例名#分支号`（如 `多分支1.1#4`），
+    `branch` = 4，`parts` 里**每根分支各占一项**（不是只给一项 + 一个 branches 数组）。
+- 该标识与 `/getselected` 返回的 `parts[].name` **同源**（普通零件都来自 `Product.Name`）。
+- **不要**把多个零件/多个分支合并进一个 `TopoDS_Compound` 再整体 `AddShape`——那样 GLB 只有一个节点、
+  没有名字，前端无法定位单个零件/分支。
+- **分支裁剪**由 `step_to_gltf.split_branch_geometry()` 完成，每根分支各一个 `_add_named_shape`；
+  导出函数返回 `list[ExportedNode]`，service 用 `_nodes_to_parts()` 把它转成 `parts`，
+  用 `_branches_of()` 得出**实际**导出的分支号。旧的 `select_branch_geometry()`（合并版）保留兼容。
+- 命名规则集中在 `step_to_gltf.branch_node_name()` + `BRANCH_SEP = "#"`，要换格式只改这一处。
 
 ## OCC (pythonocc) 踩坑记录
 - `TDataStd_Name.Set(label, name)`：`name` **必须传 Python `str`**。传 `TCollection_ExtendedString`
@@ -72,7 +76,9 @@ cable example.CATProduct
   名为 `几何体.1..4`；用真实拾取点验证，点 `Rib.N` 到第 N 个实体距离**恰好 0.0000**，
   到其它实体 ≥51 → 顺序严格对应，可作为裁剪依据。
 - **裁剪优先级**：拾取点几何判定（`BRepExtrema_DistShapeShape`）> 分支序号；两者都没有则保留整零件。
-  多选多个分支时，序号/拾取点取并集。
+  多选多个分支时，序号/拾取点取并集，**每根命中的分支各写一个独立节点**。
+- **可复跑的回归基准**（`_tmp_branch/baseline_full.stp`，同一次导出）：整根 21947 顶点；
+  单根 `#1=4305`、`#2=5823`、`#4=6410`；`[1,2]=10128`、`[1,4]=10715`（精确相加，说明分割无漏无重）。
 - 注意：`read_step_file_with_names_colors()` 只给到 `多分支1` 一层（XDE 不把 4 个实体当命名节点），
   所以**不要指望从 STEP 拿实体名**，用几何判定。
 

@@ -13,11 +13,16 @@ from pycatia.space_analyses_interfaces.spa_workbench import SPAWorkbench
 from pycatia.product_structure_interfaces.product import Product
 from pycatia.product_structure_interfaces.product_document import ProductDocument
 from pycatia.in_interfaces.selected_element import SelectedElement
-from app.utils.step_to_gltf import step_to_gltf, steps_to_gltf
+from app.utils.step_to_gltf import ExportedNode, step_to_gltf, steps_to_gltf
 
 # 线束分支在 CATIA 里的特征名，形如 EhiBundleSegmentRib.2（树里显示为 肋.2 / 分支.2），
 # 其电气路径是 ElecCurve.2 / GSMCircle.2。数字即分支序号，与导出 STEP 后的实体顺序一致。
 _BRANCH_NAME_PATTERN = re.compile(r"(?:EhiBundleSegmentRib|ElecCurve|GSMCircle)\.(\d+)")
+
+
+def _branches_of(nodes: list[ExportedNode]) -> list[int]:
+    """从导出节点清单里取出**实际**导出的分支序号（按分支拆节点时）。"""
+    return [node.branch for node in nodes if node.branch is not None]
 
 class CatiaError(RuntimeError):
     def __init__(self, code: int, message: str) -> None:
@@ -183,11 +188,12 @@ class CatiaService:
         return []
 
     # 获取glTF文件：导出当前选中项中的第 index 个（默认第 1 个）的数模，而非其父级文档。
-    # 返回 (glb 字节, 文件名, 零件清单, 分支序号列表)；零件清单里每个零件都带唯一标识
-    # （= GLB 节点名），前端据此在数模上按实例名做高亮。
+    # 返回 (glb 字节, 文件名, 节点清单, 实际导出的分支序号)；节点清单里每一项都带唯一标识
+    # （= GLB 节点名），线束选多根分支时每根分支各占一项（如 多分支1.1#1、多分支1.1#4），
+    # 前端据此在数模上按实例名做高亮。
     def get_glb(
         self, index: int = 1
-    ) -> tuple[bytes, str, list[dict[str, str]], list[int]]:
+    ) -> tuple[bytes, str, list[dict[str, Any]], list[int]]:
         app = self._connect()
         document = app.ActiveDocument
         if document is None:
@@ -317,6 +323,21 @@ class CatiaService:
                 points.append(point)
         return branches, points
 
+    # 把导出层的节点清单转成接口返回的零件清单：**每根分支一项**，
+    # id/instanceName 就是该分支在 GLB 里的节点名（如 多分支1.1#4）。
+    def _nodes_to_parts(
+        self, nodes: list[ExportedNode], products: dict[str, Any]
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": node.name,
+                "instanceName": node.name,
+                "branch": node.branch,
+                "partNumber": self._part_number(products.get(node.instance_name)),
+            }
+            for node in nodes
+        ]
+
     # 独立零件实例：直接导出其引用文档
     def _export_reference_to_glb(
         self,
@@ -325,28 +346,22 @@ class CatiaService:
         product: Any = None,
         branches: list[int] | None = None,
         pick_points: list[tuple[float, float, float]] | None = None,
-    ) -> tuple[bytes, str, list[dict[str, str]], list[int]]:
+    ) -> tuple[bytes, str, list[dict[str, Any]], list[int]]:
         with tempfile.TemporaryDirectory() as tmp_dir:
             step_path = Path(tmp_dir) / f"{name}.stp"
             glb_path = Path(tmp_dir) / f"{name}.glb"
             ref_doc.ExportData(str(step_path), "stp")
             # name 即零件实例名，写进 glTF 节点名供前端高亮；
-            # branches/pick_points 让导出层只保留选中的分支（线束场景）
-            step_to_gltf(
+            # branches/pick_points 让导出层按分支拆分：每根分支一个独立命名节点（线束场景）
+            nodes = step_to_gltf(
                 str(step_path),
                 str(glb_path),
                 name=name,
                 branches=branches,
                 pick_points=pick_points,
             )
-            parts = [
-                {
-                    "id": name,
-                    "instanceName": name,
-                    "partNumber": self._part_number(product),
-                }
-            ]
-            return glb_path.read_bytes(), name, parts, list(branches or [])
+            parts = self._nodes_to_parts(nodes, {name: product})
+            return glb_path.read_bytes(), name, parts, _branches_of(nodes)
 
     @staticmethod
     def _instance_name(product: Any, index: int) -> str:
@@ -406,7 +421,8 @@ class CatiaService:
             return False
 
     # 逐个导出叶子零件引用文档的 STEP，按各自实例位姿合成为一个 GLB。
-    # 每个零件在 GLB 里是独立节点，节点名 = CATIA 实例名，前端据此高亮。
+    # 每个零件在 GLB 里是独立节点，节点名 = CATIA 实例名，前端据此高亮；
+    # 被选中的那个实例若做了分支裁剪，则会拆成「每根分支一个节点」（如 多分支1.1#4）。
     # branches/pick_points 只作用于被选中的那个实例，避免误裁其它实例。
     def _export_instances_to_glb(
         self,
@@ -414,10 +430,10 @@ class CatiaService:
         name: str,
         branches: list[int] | None = None,
         pick_points: list[tuple[float, float, float]] | None = None,
-    ) -> tuple[bytes, str, list[dict[str, str]], list[int]]:
+    ) -> tuple[bytes, str, list[dict[str, Any]], list[int]]:
         with tempfile.TemporaryDirectory() as tmp_dir:
             entries: list[tuple[str, list[list[float]], str, list[int], list]] = []
-            parts: list[dict[str, str]] = []
+            products: dict[str, Any] = {}
             for i, (matrix, inst) in enumerate(instances):
                 ref_doc = inst.com_object.ReferenceProduct.Parent
                 step_path = Path(tmp_dir) / f"part_{i}.stp"
@@ -433,16 +449,11 @@ class CatiaService:
                         list(pick_points or []) if is_target else [],
                     )
                 )
-                parts.append(
-                    {
-                        "id": instance_name,
-                        "instanceName": instance_name,
-                        "partNumber": self._part_number(inst),
-                    }
-                )
+                products[instance_name] = inst
             glb_path = Path(tmp_dir) / f"{name}.glb"
-            steps_to_gltf(entries, str(glb_path))
-            return glb_path.read_bytes(), name, parts, list(branches or [])
+            nodes = steps_to_gltf(entries, str(glb_path))
+            parts = self._nodes_to_parts(nodes, products)
+            return glb_path.read_bytes(), name, parts, _branches_of(nodes)
 
     # 获取零件位置（递归装配体结构树，返回每个节点的局部/全局位置与旋转）
     def list_position(self, fullName: str) -> list[dict[str, Any]]:

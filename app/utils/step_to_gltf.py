@@ -5,7 +5,8 @@
    ``Bracket.1``）作为 glTF 节点名（``node.name``），前端按节点名高亮。
 2. 支持**按分支裁剪**：线束类零件的多个分支几何都装在同一个 CATPart 里，
    整体导出会得到「整根线束」。调用方给出分支序号（或 3D 拾取点）后，这里只把
-   选中的那个实体写进 GLB。
+   选中的那部分写进 GLB；**每根选中的分支各写一个独立节点**，节点名为
+   ``父实例名#分支号``（如 ``多分支1.1#4``），前端可以只高亮其中某一根。
 
 注意：旧实现把所有零件合并进一个 ``TopoDS_Compound`` 再整体 AddShape，
 结果 GLB 里只有一个节点且没有名字，前端无法定位到单个零件，故不再合并。
@@ -51,6 +52,24 @@ class StepEntry:
     name: str | None = None
     branches: list[int] = field(default_factory=list)
     pick_points: list[PickPoint] = field(default_factory=list)
+
+
+# 分支节点名的分隔符：父实例名#分支序号，如 多分支1.1#1
+BRANCH_SEP = "#"
+
+
+@dataclass
+class ExportedNode:
+    """一个已经写进 GLB 的节点（要么是整个零件，要么是某根分支）。"""
+
+    name: str                   # glTF 节点名，也是给前端的唯一标识
+    instance_name: str          # 所属零件实例名（不含分支后缀）
+    branch: int | None = None   # 分支序号（1 起）；None 表示该节点是整个零件
+
+
+def branch_node_name(instance_name: str, branch: int) -> str:
+    """分支节点的唯一名 = 父实例名 + ``#`` + 分支序号，如 ``多分支1.1#1``。"""
+    return f"{instance_name}{BRANCH_SEP}{branch}"
 
 
 def _matrix_to_trsf(m: list[list[float]]) -> gp_Trsf:
@@ -123,24 +142,25 @@ def _merge_solids(solids: list[TopoDS_Shape]) -> TopoDS_Shape:
     return comp
 
 
-def select_branch_geometry(
+def split_branch_geometry(
     shape: TopoDS_Shape,
     branches: list[int] | None = None,
     pick_points: list[PickPoint] | None = None,
-) -> tuple[TopoDS_Shape, list[int]]:
-    """从「一整根线束」里挑出选中的分支实体。
+) -> list[tuple[TopoDS_Shape, int]]:
+    """把「一整根线束」按分支拆开，返回 [(分支实体, 分支序号 1 起), ...]（序号升序）。
 
     优先用 3D 拾取点做几何判定（点到实体距离最小者胜出，最可靠）；
-    没有拾取点时才退回到分支序号。返回 (裁剪后的 shape, 实际选中的分支序号)。
+    没有拾取点时才退回到分支序号。
+    没有任何裁剪要求、或一个分支都没匹配上时返回 ``[]``，调用方据此保留整个零件。
     """
     branches = list(branches or [])
     pick_points = list(pick_points or [])
     if not branches and not pick_points:
-        return shape, []
+        return []
 
     solids = _iter_top_solids(shape)
     if not solids:
-        return shape, []
+        return []
 
     chosen: set[int] = set()
     if pick_points:
@@ -163,10 +183,26 @@ def select_branch_geometry(
             branches,
             len(solids),
         )
-        return shape, []
+        return []
 
-    ordered = sorted(chosen)
-    return _merge_solids([solids[i] for i in ordered]), [i + 1 for i in ordered]
+    return [(solids[i], i + 1) for i in sorted(chosen)]
+
+
+def select_branch_geometry(
+    shape: TopoDS_Shape,
+    branches: list[int] | None = None,
+    pick_points: list[PickPoint] | None = None,
+) -> tuple[TopoDS_Shape, list[int]]:
+    """从「一整根线束」里挑出选中的分支实体，**合并**成一个 shape。
+
+    保留给「不需要按分支区分节点」的调用方；新代码请用
+    :func:`split_branch_geometry`，它能把每根分支拆成独立节点。
+    返回 (裁剪后的 shape, 实际选中的分支序号)；没有命中时原样返回整个零件。
+    """
+    kept = split_branch_geometry(shape, branches, pick_points)
+    if not kept:
+        return shape, []
+    return _merge_solids([solid for solid, _ in kept]), [branch for _, branch in kept]
 
 
 def _add_named_shape(
@@ -219,6 +255,44 @@ def _load_entry_shape(entry: StepEntry) -> TopoDS_Shape:
     return shape
 
 
+def _add_entry_nodes(
+    shape_tool,
+    shape: TopoDS_Shape,
+    name: str | None,
+    index: int,
+    lin_def: float,
+    ang_def: float,
+    branches: list[int],
+    pick_points: list[PickPoint],
+) -> list[ExportedNode]:
+    """把一个零件的 shape 写进 XDE 文档，返回它产生的所有节点。
+
+    给了分支信息且匹配成功时，**每根分支各写一个独立命名节点**（``父实例名#分支号``），
+    前端可以只高亮其中某一根；否则整个零件写成一个节点（节点名 = 实例名）。
+    """
+    instance_name = (str(name).strip() if name else "") or f"part_{index}"
+
+    kept = split_branch_geometry(shape, branches, pick_points)
+    if kept:
+        logger.info(
+            "entry {} kept branch(es) {} (requested branches={})",
+            index,
+            [branch for _, branch in kept],
+            branches,
+        )
+        nodes: list[ExportedNode] = []
+        for solid, branch in kept:
+            node_name = branch_node_name(instance_name, branch)
+            _add_named_shape(shape_tool, solid, node_name, index, lin_def, ang_def)
+            nodes.append(
+                ExportedNode(name=node_name, instance_name=instance_name, branch=branch)
+            )
+        return nodes
+
+    _add_named_shape(shape_tool, shape, instance_name, index, lin_def, ang_def)
+    return [ExportedNode(name=instance_name, instance_name=instance_name)]
+
+
 def step_to_gltf(
     in_file: str,
     out_file: str,
@@ -227,7 +301,7 @@ def step_to_gltf(
     name: str | None = None,
     branches: list[int] | None = None,
     pick_points: list[PickPoint] | None = None,
-):
+) -> list[ExportedNode]:
     """把单个 STEP 文件转换为 glTF/GLB。
 
     参数:
@@ -238,6 +312,8 @@ def step_to_gltf(
         name: 写入 glTF 节点名的名称（通常是 CATIA 零件实例名）
         branches: 只要 STEP 里的第 N 个分支实体（1 起）；为空表示整个零件
         pick_points: 3D 拾取点（总成坐标），比 branches 更可靠，优先使用
+
+    返回：写进 GLB 的节点清单（按分支拆分时每根分支一项）
     """
     doc = TDocStd_Document("doc")
     shape_tool = XCAFDoc_DocumentTool.ShapeTool(doc.Main())
@@ -245,12 +321,12 @@ def step_to_gltf(
     entry = StepEntry(step_path=str(in_file), name=name, branches=list(branches or []),
                       pick_points=[tuple(p) for p in (pick_points or [])])
     shape = _load_entry_shape(entry)
-    shape, kept = select_branch_geometry(shape, entry.branches, entry.pick_points)
-    if kept:
-        logger.info("step_to_gltf kept branch(es) {} of {}", kept, in_file)
-    _add_named_shape(shape_tool, shape, name, 0, lin_def, ang_def)
+    nodes = _add_entry_nodes(
+        shape_tool, shape, name, 0, lin_def, ang_def, entry.branches, entry.pick_points
+    )
 
     _write_document(doc, out_file)
+    return nodes
 
 
 def steps_to_gltf(
@@ -260,11 +336,12 @@ def steps_to_gltf(
     ang_def: float = 0.5,
     branches: list[int] | None = None,
     pick_points: list[PickPoint] | None = None,
-):
+) -> list[ExportedNode]:
     """读取多个 STEP 文件，各自应用变换矩阵后合并写成一个 glTF/GLB。
 
     每个零件写成**一个独立节点**，节点名 = 该零件的实例名，供前端高亮；
-    若该零件内部含多个分支且给出 branches/pick_points，则只写入选中的分支。
+    若该零件内部含多个分支且给出 branches/pick_points，则**每根选中的分支各写一个
+    独立节点**（``父实例名#分支号``），前端可以只高亮其中某一根。
 
     参数:
         entries: [(step_path, matrix_or_None, name_or_None[, branches[, pick_points]]), ...]
@@ -272,6 +349,8 @@ def steps_to_gltf(
         out_file: 输出 glTF/GLB 路径
         lin_def / ang_def: 网格精度
         branches / pick_points: 函数级默认值，用于没有单独指定裁剪信息的 entry
+
+    返回：写进 GLB 的节点清单（按 entry 顺序，一个 entry 可能产生多个分支节点）
     """
     doc = TDocStd_Document("doc")
     shape_tool = XCAFDoc_DocumentTool.ShapeTool(doc.Main())
@@ -279,6 +358,7 @@ def steps_to_gltf(
     default_branches = list(branches or [])
     default_points = [tuple(p) for p in (pick_points or [])]
 
+    nodes: list[ExportedNode] = []
     for index, raw in enumerate(entries):
         entry = _as_entry(raw)
         if not entry.branches:
@@ -287,13 +367,18 @@ def steps_to_gltf(
             entry.pick_points = list(default_points)
 
         shape = _load_entry_shape(entry)
-        shape, kept = select_branch_geometry(shape, entry.branches, entry.pick_points)
-        if kept:
-            logger.info(
-                "steps_to_gltf entry {} kept branch(es) {} (requested branches={})",
-                index, kept, entry.branches,
+        nodes.extend(
+            _add_entry_nodes(
+                shape_tool,
+                shape,
+                entry.name,
+                index,
+                lin_def,
+                ang_def,
+                entry.branches,
+                entry.pick_points,
             )
-
-        _add_named_shape(shape_tool, shape, entry.name, index, lin_def, ang_def)
+        )
 
     _write_document(doc, out_file)
+    return nodes

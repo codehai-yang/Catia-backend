@@ -28,8 +28,9 @@ def select_part(partName: str = Body(...)) -> ApiResponse[list[PartItem]]:
     return ApiResponse(data=catia_service.select_part(partName))
 
 # 获取glTF/GLB文件（当前选中项中的第 index 个，默认第 1 个）
-# 返回 JSON：零件清单（含唯一标识 id）+ 模型本体（base64）。前端用 parts[].id
+# 返回 JSON：节点清单（含唯一标识 id）+ 模型本体（base64）。前端用 parts[].id
 # 与 GLB 里的节点名(node.name) 对齐，即可在数模上按实例名高亮。
+# 选中的是线束且选了多根分支时，parts 里每根分支各一项（id 形如 多分支1.1#4）。
 @router.post(
     "/getglb",
     response_model=ApiResponse[GlbPayload],
