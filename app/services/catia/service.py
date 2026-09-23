@@ -177,8 +177,10 @@ class CatiaService:
                 return parts
         return []
 
-    # 获取glTF文件：导出当前选中项中的第 index 个（默认第 1 个）的数模，而非其父级文档
-    def get_glb(self, index: int = 1) -> tuple[bytes, str]:
+    # 获取glTF文件：导出当前选中项中的第 index 个（默认第 1 个）的数模，而非其父级文档。
+    # 返回 (glb 字节, 文件名, 零件清单)；零件清单里每个零件都带唯一标识（= GLB 节点名），
+    # 前端据此在数模上按实例名做高亮。
+    def get_glb(self, index: int = 1) -> tuple[bytes, str, list[dict[str, str]]]:
         app = self._connect()
         document = app.ActiveDocument
         if document is None:
@@ -203,6 +205,7 @@ class CatiaService:
         # 首选：递归收集选中 Product 子树下所有引用 CATPart 的叶子实例，逐个导出其
         # 引用文档的 STEP，再按各自实例位姿合成一个 GLB。这样既不会带上整个线束文档，
         # 也能正确处理「卡扣装配」这类子装配（其自身无实体，实体都在叶子 CATPart 里）。
+        leaf_product: Any = None
         try:
             leaf_product = Product(selected.LeafProduct)
             instances = self._collect_part_transforms(leaf_product, _identity_matrix())
@@ -225,18 +228,50 @@ class CatiaService:
                 getattr(ref_doc, "Name", None),
                 getattr(ref_doc, "FullName", None),
             )
-            return self._export_reference_to_glb(ref_doc, instance_name)
+            return self._export_reference_to_glb(ref_doc, instance_name, leaf_product)
 
         raise CatiaError(StatusCode.VALIDATION_ERROR, f"无法导出选中对象 {instance_name}")
 
     # 独立零件实例：直接导出其引用文档
-    def _export_reference_to_glb(self, ref_doc: Any, name: str) -> tuple[bytes, str]:
+    def _export_reference_to_glb(
+        self, ref_doc: Any, name: str, product: Any = None
+    ) -> tuple[bytes, str, list[dict[str, str]]]:
         with tempfile.TemporaryDirectory() as tmp_dir:
             step_path = Path(tmp_dir) / f"{name}.stp"
             glb_path = Path(tmp_dir) / f"{name}.glb"
             ref_doc.ExportData(str(step_path), "stp")
-            step_to_gltf(str(step_path), str(glb_path))
-            return glb_path.read_bytes(), name
+            # name 即零件实例名，写进 glTF 节点名供前端高亮
+            step_to_gltf(str(step_path), str(glb_path), name=name)
+            parts = [
+                {
+                    "id": name,
+                    "instanceName": name,
+                    "partNumber": self._part_number(product),
+                }
+            ]
+            return glb_path.read_bytes(), name, parts
+
+    @staticmethod
+    def _instance_name(product: Any, index: int) -> str:
+        """取零件实例名（如 Bracket.1）。取不到时退回 part_<index> 兜底。"""
+        for getter in (lambda: product.name, lambda: product.com_object.Name):
+            try:
+                value = str(getter()).strip()
+            except Exception:
+                value = ""
+            if value:
+                return value
+        return f"part_{index}"
+
+    @staticmethod
+    def _part_number(product: Any) -> str:
+        """取引用零件号（PartNumber）。取不到返回空串。"""
+        if product is None:
+            return ""
+        try:
+            return str(product.reference_product.part_number or "").strip()
+        except Exception:
+            return ""
 
     # 递归收集 Product 子树下所有引用 CATPart 的叶子实例及其全局位姿矩阵
     def _collect_part_transforms(
@@ -273,20 +308,30 @@ class CatiaService:
         except Exception:
             return False
 
-    # 逐个导出叶子零件引用文档的 STEP，按各自实例位姿合成为一个 GLB
+    # 逐个导出叶子零件引用文档的 STEP，按各自实例位姿合成为一个 GLB。
+    # 每个零件在 GLB 里是独立节点，节点名 = CATIA 实例名，前端据此高亮。
     def _export_instances_to_glb(
         self, instances: list[tuple[list[list[float]], Any]], name: str
-    ) -> tuple[bytes, str]:
+    ) -> tuple[bytes, str, list[dict[str, str]]]:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            entries: list[tuple[str, list[list[float]]]] = []
+            entries: list[tuple[str, list[list[float]], str]] = []
+            parts: list[dict[str, str]] = []
             for i, (matrix, inst) in enumerate(instances):
                 ref_doc = inst.com_object.ReferenceProduct.Parent
                 step_path = Path(tmp_dir) / f"part_{i}.stp"
                 ref_doc.ExportData(str(step_path), "stp")
-                entries.append((str(step_path), matrix))
+                instance_name = self._instance_name(inst, i)
+                entries.append((str(step_path), matrix, instance_name))
+                parts.append(
+                    {
+                        "id": instance_name,
+                        "instanceName": instance_name,
+                        "partNumber": self._part_number(inst),
+                    }
+                )
             glb_path = Path(tmp_dir) / f"{name}.glb"
             steps_to_gltf(entries, str(glb_path))
-            return glb_path.read_bytes(), name
+            return glb_path.read_bytes(), name, parts
 
     # 获取零件位置（递归装配体结构树，返回每个节点的局部/全局位置与旋转）
     def list_position(self, fullName: str) -> list[dict[str, Any]]:

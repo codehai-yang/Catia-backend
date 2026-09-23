@@ -29,3 +29,16 @@ class SelectedParts(BaseModel):
     assemblyName: str
     totalLength: float = 0.0  # 总成实例总长度 = 选中零件长度之和
     parts: list[SelectedPart] = []
+
+
+# GLB 里的一个零件节点
+class GlbNode(BaseModel):
+    id: str                 # 唯一标识：即 GLB 里的节点名(node.name)，前端据此在数模上高亮
+    instanceName: str       # CATIA 零件实例名，如 Bracket.1（与 /getselected 的 name 同源）
+    partNumber: str = ""    # 引用零件号，取不到时为空
+
+# /getglb 返回体：零件清单 + 模型本体（base64）
+class GlbPayload(BaseModel):
+    filename: str
+    parts: list[GlbNode] = []
+    glb: str                # GLB 文件内容的 base64 编码，前端解码后加载

@@ -1,9 +1,15 @@
+import base64
+
 from fastapi import APIRouter
 from fastapi.params import Body
 from fastapi.responses import Response
-from urllib.parse import quote
 from pycatia.mec_mod_interfaces import body
-from app.schemas.catia import PartItem, SelectedPart, SelectedParts
+from app.schemas.catia import (
+    GlbNode,
+    GlbPayload,
+    PartItem,
+    SelectedParts,
+)
 from app.schemas.common import ApiResponse
 from app.services.catia.service import CatiaService
 
@@ -21,20 +27,22 @@ def list_parts() -> ApiResponse[list[PartItem]]:
 def select_part(partName: str = Body(...)) -> ApiResponse[list[PartItem]]:
     return ApiResponse(data=catia_service.select_part(partName))
 
-#获取glTF/GLB文件（当前选中项中的第 index 个，默认第 1 个）
-@router.post("/getglb")
-def get_gltf(index: int = Body(1)) -> Response:
-    data, name = catia_service.get_glb(index=index)
-    filename = f"{name}.glb"
-    return Response(
-        content=data,
-        media_type="model/gltf-binary",
-        headers={
-            "Content-Disposition": (
-                f"attachment; filename=\"part.glb\"; "
-                f"filename*=UTF-8''{quote(filename)}"
-            )
-        },
+# 获取glTF/GLB文件（当前选中项中的第 index 个，默认第 1 个）
+# 返回 JSON：零件清单（含唯一标识 id）+ 模型本体（base64）。前端用 parts[].id
+# 与 GLB 里的节点名(node.name) 对齐，即可在数模上按实例名高亮。
+@router.post(
+    "/getglb",
+    response_model=ApiResponse[GlbPayload],
+    summary="Export GLB of the selected item, with part instance names",
+)
+def get_gltf(index: int = Body(1)) -> ApiResponse[GlbPayload]:
+    data, name, parts = catia_service.get_glb(index=index)
+    return ApiResponse(
+        data=GlbPayload(
+            filename=f"{name}.glb",
+            parts=[GlbNode(**part) for part in parts],
+            glb=base64.b64encode(data).decode("ascii"),
+        )
     )
 
 #获取零件位置
