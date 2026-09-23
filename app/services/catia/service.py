@@ -31,11 +31,19 @@ class CatiaError(RuntimeError):
 
 
 def _components_to_matrix(components: Any) -> list[list[float]]:
-    """把 Position.GetComponents 的 12 个分量转成 4x4 行主序变换矩阵。"""
+    """把 Position.GetComponents 的 12 个分量转成 4x4 行主序变换矩阵。
+
+    CATIA 文档：前 9 个分量**依次是 x 轴、y 轴、z 轴的分量**，最后 3 个是原点坐标。
+    轴向量构成旋转矩阵的**列**（R·e_x = x轴），所以这里按列填充。
+
+    ⚠️ 别改成按行填：那等于对旋转部分做转置，零件会绕轴**反向**倾斜
+    （现象是"位置正确但零件歪了"）。曾用几何实测验证过——把 CATIA 里的拾取点
+    逆变换回零件局部坐标，按列填时点到零件表面距离 0.015mm，按行填时 1.545mm。
+    """
     return [
-        [components[0], components[1], components[2], components[9]],
-        [components[3], components[4], components[5], components[10]],
-        [components[6], components[7], components[8], components[11]],
+        [components[0], components[3], components[6], components[9]],
+        [components[1], components[4], components[7], components[10]],
+        [components[2], components[5], components[8], components[11]],
         [0.0, 0.0, 0.0, 1.0],
     ]
 
