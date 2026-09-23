@@ -1,0 +1,19 @@
+=== 1) 逐分支量中心线（新逻辑核心）===
+  分支 1: got=175.0017207078906  expect≈175.002  OK
+  分支 2: got=245.35865428771746  expect≈245.359  OK
+  分支 3: got=250.35385449274068  expect≈250.354  OK
+  分支 4: got=279.0958823730618  expect≈279.096  OK
+  -> 全部通过
+
+=== 2) _total_length 汇总（分支中心线优先 + 直接量兜底）===
+  四根分支求和: got=949.8101118614104  OK
+  两根分支: got=495.71250878045817  OK
+  重复分支去重后仍为单根: got=245.35865428771746  OK
+  无分支->用直接量结果: got=50.0  OK
+  无分支且量不到->null: got=None  OK
+  分支量不到->退回直接量: got=12.5  OK
+
+=== 3) 真实会话：当前选中项 -> get_selected_instances() ===
+  active document = cable example.CATProduct   Count2 = 0
+  (没有选中项：请先在 CATIA 里点一根分支的表皮/中心线，再重跑本脚本)
+  response = {"assemblyName": "cable example", "totalLength": 0, "parts": []}

@@ -19,6 +19,14 @@ from app.utils.step_to_gltf import ExportedNode, steps_to_gltf
 # 其电气路径是 ElecCurve.2 / GSMCircle.2。数字即分支序号，与导出 STEP 后的实体顺序一致。
 _BRANCH_NAME_PATTERN = re.compile(r"(?:EhiBundleSegmentRib|ElecCurve|GSMCircle)\.(\d+)")
 
+# 分支**中心线**（电气路径）的内部特征名，形如 ElecCurve.2；规格树里显示为 柔性曲线.2。
+# 量分支长度只能量它：用户点分支的**表皮**（肋实体表面）时 CATIAMeasurable.Length 会直接
+# 报「方法 Length 失败」，点中心线才量得出曲线长度。
+# 实测（D:\电缆数模案例）分支 1~4 的中心线长 = 175.0 / 245.4 / 250.4 / 279.1 mm，
+# 与同一根分支实体包围盒最长边 171.3 / 232.0 / 193.2 / 257.6 mm 吻合，**单位就是 mm**。
+# ⚠️ 别拿 GSMCircle.N（圆.N）当中心线：它是截面圆，Length 是周长（40.84 = 2π×6.5）。
+_CENTERLINE_NAME_TEMPLATE = "ElecCurve.{branch}"
+
 
 def _branches_of(nodes: list[ExportedNode]) -> list[int]:
     """从导出节点清单里取出**实际**导出的分支序号（按分支拆节点时）。"""
@@ -279,8 +287,17 @@ class CatiaService:
 
         其中的 2 就是分支序号，与导出 STEP 后第 2 个实体对应。
         纯树选中（不点几何）拿不到这个信息，此时返回 None。
+
+        查询顺序：``Value.Name``（真实 3D 拾取时带的就是这个）→ ``Reference.Name`` →
+        ``Reference.DisplayName``（用 CreateReferenceFromBRepName 还原出来的引用，
+        名字会被写成 CATIAReference17 这种自动名，只有 DisplayName 还留着
+        ``FSur:(Face:(Brp:(EhiBundleSegmentRib.2;...`` 这串面包屑）。
         """
-        for getter in (lambda: item.Value.Name, lambda: item.Reference.Name):
+        for getter in (
+            lambda: item.Value.Name,
+            lambda: item.Reference.Name,
+            lambda: item.Reference.DisplayName,
+        ):
             try:
                 text = str(getter())
             except Exception:
@@ -553,40 +570,119 @@ class CatiaService:
         except Exception:
             assembly_name = document.Name
 
-        # 同名实例只保留一条，长度累加得到总长度
-        lengths: dict[str, float | None] = {}
+        # 同名实例只保留一条；长度按「分支中心线」汇总，非分支零件仍按选中对象直接量。
+        seen: set[str] = set()
         order: list[str] = []
+        branch_ids: dict[str, list[int]] = {}   # 叶子零件名 -> 选中项里识别到的分支号（去重、保序）
+        direct: dict[str, list[float]] = {}     # 叶子零件名 -> 直接量出来的长度（非分支 / 兜底）
+        part_ctx: dict[str, tuple[Any, Any] | None] = {}  # 叶子零件名 -> (part, spa)
+
         for i in range(1, selection.Count2 + 1):
             try:
-                selected = SelectedElement(selection.Item2(i))
+                # 逐个取、立刻用：Item2 的取值顺序会影响后面的拾取状态（见 _pick_point）
+                item = selection.Item2(i)
+                selected = SelectedElement(item)
                 name = selected.leaf_product.name
             except Exception as exc:
                 logger.warning("failed to read selection {}: {}", i, exc)
                 continue
             if not name or name == "InvalidLeafProduct":
                 continue
-            if name not in lengths:
-                lengths[name] = None
+            if name not in seen:
+                seen.add(name)
                 order.append(name)
+
+            # 点分支（表皮或中心线）时能解析出分支号，长度一律改用该分支的中心线来量，
+            # 这样用户点表皮、点中心线拿到的长度一致（原因见 _CENTERLINE_NAME_TEMPLATE）。
+            branch = self._branch_index(item)
+            if branch is not None:
+                branch_ids.setdefault(name, [])
+                if branch not in branch_ids[name]:
+                    branch_ids[name].append(branch)
+                if name not in part_ctx:
+                    part_ctx[name] = self._part_measure_context(item, name)
+                continue
+
+            # 非分支（卡扣、接头…）：沿用原行为，直接量选中的那个对象
             try:
                 length = float(spa.get_measurable(selected.reference).length)
-                lengths[name] = (lengths[name] or 0.0) + length
+                direct.setdefault(name, []).append(length)
             except Exception as exc:
                 logger.warning("failed to measure length for {}: {}", name, exc)
 
         results: list[dict[str, Any]] = []
         for name in order:
-            length = lengths[name]
+            length = self._total_length(name, branch_ids, direct, part_ctx)
             results.append({
                 "name": name,
                 "length": round(length, 3) if length is not None else None,
             })
         # 总成实例总长度 = 所有选中零件长度之和（测不出的项不计入）
-        total_length = sum(l for l in lengths.values() if l is not None)
+        total_length = sum(r["length"] for r in results if r["length"] is not None)
         return {
             "assemblyName": assembly_name,
             "totalLength": round(total_length, 3),
             "parts": results,
         }
+
+    # 汇总一个叶子零件的长度：
+    # 优先用「识别到的分支号 -> 该分支中心线长度」之和；分支量不到时退回直接量的结果。
+    def _total_length(
+        self,
+        name: str,
+        branch_ids: dict[str, list[int]],
+        direct: dict[str, list[float]],
+        part_ctx: dict[str, tuple[Any, Any] | None],
+    ) -> float | None:
+        branches = branch_ids.get(name) or []
+        context = part_ctx.get(name)
+        if branches and context:
+            part, part_spa = context
+            measured = [
+                length
+                for length in (
+                    self._measure_centerline(part, part_spa, branch)
+                    for branch in branches
+                )
+                if length is not None
+            ]
+            if measured:
+                return sum(measured)
+            logger.info("{}: 分支中心线量不到长度，退回直接测量", name)
+        values = direct.get(name) or []
+        return sum(values) if values else None
+
+    # 解析叶子零件所属的 CATPart 文档，返回 (part, spa) 供量中心线用；取不到返回 None。
+    # 必须传入刚取出来的选中项对象（同 _pick_point 的注意事项）。
+    def _part_measure_context(self, item: Any, name: str) -> tuple[Any, Any] | None:
+        try:
+            ref_doc = item.LeafProduct.ReferenceProduct.Parent
+        except Exception as exc:
+            logger.warning("{}: 取引用零件文档失败: {}", name, exc)
+            return None
+        if not self._is_part_document(ref_doc):
+            return None
+        try:
+            return PartDocument(ref_doc).part, SPAWorkbench(ref_doc)
+        except Exception as exc:
+            logger.warning("{}: 打开零件文档失败: {}", name, exc)
+            return None
+
+    # 量某个分支的中心线（电气路径）长度。找不到或量不出返回 None。
+    @staticmethod
+    def _measure_centerline(part: Any, part_spa: Any, branch: int) -> float | None:
+        try:
+            curve = part.find_object_by_name(
+                _CENTERLINE_NAME_TEMPLATE.format(branch=branch)
+            )
+        except Exception:
+            logger.warning("分支 {} 找不到中心线，长度返回 null", branch)
+            return None
+        try:
+            reference = part.create_reference_from_object(curve)
+            return float(part_spa.get_measurable(reference).length)
+        except Exception as exc:
+            logger.warning("分支 {} 中心线长度测量失败: {}", branch, exc)
+            return None
 
     

@@ -22,7 +22,10 @@ class PartPosition(BaseModel):
 # 选中的零件实例
 class SelectedPart(BaseModel):
     name: str
-    length: float | None = None  # 实例总长度（CATIA 文档单位，通常 mm）
+    # 线束分支 = 该分支**中心线**（电气路径）长度，单位 mm；用户点分支表皮或点中心线都算得出来。
+    # 普通零件（卡扣/接头…）仍直接量选中对象，量不出时为 null。
+    # 同一个零件实例被选中多次（含多根分支）时按名称合并、长度相加。
+    length: float | None = None
 
 # 选中结果：总成实例名称 + 选中的零件列表 + 总长度
 class SelectedParts(BaseModel):

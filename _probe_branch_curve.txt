@@ -1,0 +1,107 @@
+attached to running CATIA
+open doc: cable example.CATProduct
+open doc: GeometricalBundle1.CATProduct
+open doc: MultiBranchable1.CATPart
+open doc: clipA.CATPart
+open doc: conn1_male.CATPart
+open doc: conn1_female.CATPart
+opening D:\电缆数模案例\cable example.CATProduct ...
+opened: cable example.CATProduct
+root product = cable example
+- cable example
+  - Clips ASSY-project cable example
+    - clipA.1
+    - clipA.2
+    - clipA.3
+  - Connectors ASSY-project cable example
+    - conn1_female.1
+    - conn1_male.1
+  - Grommets ASSY-project cable example
+  - Eyelets ASSY-project cable example
+  - Harness ASSY-project cable example
+    - 几何束1.1
+      - 多分支1.1
+leaf found = True 多分支1.1
+ref doc = MultiBranchable1.CATPart
+
+=== A) 实体 Body（零件几何体）===
+  Body: 零件几何体
+  Body: 几何体.1
+     shape: 肋.1
+  Body: 几何体.2
+     shape: 肋.2
+  Body: 几何体.3
+     shape: 肋.3
+  Body: 几何体.4
+     shape: 肋.4
+
+=== B) HybridBody / HybridShape（电气线路几何体）===
+  HybridBody: 电气线路几何体.1
+     shape name='柔性曲线.1' length=175.0017207078906 radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='圆.1' length=40.8407044966673 radius=6.499999999999998
+  HybridBody: 几何图形集.1
+     shape name='平面.3' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.4' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.1' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.2' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='项目.2' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.4' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='曲面.1' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.11' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.12' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.5' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.6' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='项目.4' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.17' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.18' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.8' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.9' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='项目.6' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.22' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.23' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.10' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.11' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='项目.8' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.28' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.29' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.13' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.14' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='项目.10' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.33' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='平面.34' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.15' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.16' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='项目.12' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='点.18' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='曲面.2' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='曲面.3' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None) radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+  HybridBody: 电气线路几何体.2
+     shape name='柔性曲线.2' length=245.35865428771746 radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='圆.2' length=40.84070449666734 radius=6.500000000000006
+  HybridBody: 电气线路几何体.3
+     shape name='柔性曲线.3' length=250.35385449274068 radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='圆.3' length=40.840704496667406 radius=6.500000000000017
+  HybridBody: 电气线路几何体.4
+     shape name='柔性曲线.4' length=279.0958823730618 radius=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Radius 失败', None, 0, -2147467259), None)
+     shape name='圆.4' length=40.840704496667314 radius=6.500000000000002
+
+=== C) find_object_by_name 逐个候选 ===
+  ElecCurve.1                  -> FOUND name='柔性曲线.1' length=175.0017207078906
+  ElecCurve.2                  -> FOUND name='柔性曲线.2' length=245.35865428771746
+  ElecCurve.3                  -> FOUND name='柔性曲线.3' length=250.35385449274068
+  ElecCurve.4                  -> FOUND name='柔性曲线.4' length=279.0958823730618
+  柔性曲线.1                       -> FOUND name='柔性曲线.1' length=175.0017207078906
+  柔性曲线.2                       -> FOUND name='柔性曲线.2' length=245.35865428771746
+  GSMCircle.1                  -> FOUND name='圆.1' length=40.8407044966673
+  GSMCircle.2                  -> FOUND name='圆.2' length=40.84070449666734
+  圆.1                          -> FOUND name='圆.1' length=40.8407044966673
+  圆.2                          -> FOUND name='圆.2' length=40.84070449666734
+  EhiBundleSegmentRib.1        -> FOUND name='肋.1' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None)
+  EhiBundleSegmentRib.2        -> FOUND name='肋.2' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None)
+  肋.1                          -> FOUND name='肋.1' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None)
+  肋.2                          -> FOUND name='肋.2' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None)
+  几何体.1                        -> FOUND name='几何体.1' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None)
+  几何体.2                        -> FOUND name='几何体.2' length=<err> com_error: (-2147352567, '发生意外。', (0, 'CATIAMeasurable', '方法 Length 失败', None, 0, -2147467259), None)
+
+=== D) 工作台/单位参考：量一个已知长度（整体导出参考）===
+  (跳过)

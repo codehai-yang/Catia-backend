@@ -87,6 +87,15 @@ cable example.CATProduct
 - 一个「多分支」线束的**所有分支几何都在同一个 CATPart 里**：4 个分支 = 4 个
   `几何体.N`（实体肋）+ 4 个 `电气线路几何体.N`（电气路径）。
 - 用户在规格树里点的 `分支.1 / 分支.2 / 分支.3 ...` 是**电气工作台（ELW）特征**。
+- 分支号 N 的三件套（数字都是分支号，实测确认）：
+  | 显示名 | 内部名 | 是什么 | Length |
+  |---|---|---|---|
+  | `肋.N`（Body `几何体.N` 里） | `EhiBundleSegmentRib.N` | 分支实体 / **表皮** | ❌ 报「方法 Length 失败」 |
+  | `柔性曲线.N`（HybridBody `电气线路几何体.N` 里） | `ElecCurve.N` | **中心线 / 电气路径** | ✅ 就是分支长度 |
+  | `圆.N` | `GSMCircle.N` | 截面圆（R=6.5） | ⚠️ 是周长 40.84，别用 |
+- 中心线长度（mm，`Measurable.Length` 实测）：#1 **175.002**、#2 **245.359**、
+  #3 **250.354**、#4 **279.096**；与实体包围盒最长边 171.3 / 232.0 / 193.2 / 257.6 mm
+  吻合（长度恒 ≥ 最长边），也反证了**单位就是 mm**。
 
 ## CATIA 自动化限制（踩坑，重要）
 - **`分支.N` 未暴露给自动化**：无论树里点 `分支.2` 还是 Search `Name=分支*,all`（能匹配到 4 个），
@@ -108,6 +117,10 @@ cable example.CATProduct
 - **3D 视图点分支表面：能拿到分支号**。选中项的 `Value.Name` / `Reference.Name` 形如
   `Selection_RSur:(Face:(Brp:(EhiBundleSegmentRib.2;0:(Brp:(ElecCurve.2;1);
   Brp:(GSMCircle.2;...))));...)`，其中的数字即分支号（正则见 service 的 `_BRANCH_NAME_PATTERN`）。
+- `_branch_index` 的取值顺序：`Value.Name` → `Reference.Name` → **`Reference.DisplayName`**。
+  最后一档是为「用 `CreateReferenceFromBRepName` 还原出来的引用」准备的：它的前两者都是
+  `CATIAReference17` 这种自动名，只有 DisplayName 还留着 `FSur:(Face:(Brp:(EhiBundleSegmentRib.2;…`
+  这串面包屑（这个特性正好被用来做无人工点击的端到端测试，见下）。
 - **3D 拾取点**：`SelectedElement(item).get_coordinates()` 给出总成坐标的拾取点。
   `Type == "Product"` 或坐标为 `(0,0,0)` 时视为无效（非几何选择的兜底值）。
 - ⚠️ **多选时不能批量预取 `SelectedElement`**：`GetCoordinates()` 依赖 CATIA **当前拾取状态**。
@@ -126,6 +139,32 @@ cable example.CATProduct
   单根 `#1=4305`、`#2=5823`、`#4=6410`；`[1,2]=10128`、`[1,4]=10715`（精确相加，说明分割无漏无重）。
 - 注意：`read_step_file_with_names_colors()` 只给到 `多分支1` 一层（XDE 不把 4 个实体当命名节点），
   所以**不要指望从 STEP 拿实体名**，用几何判定。
+
+## /getselected 长度字段 = 分支中心线（已实现，重要）
+- 需求：用户点分支**表皮**（肋实体面）时，原来的 `Measurable.Length` 直接报
+  「方法 Length 失败」（日志里刷了一整屏）；只有点**中心线**才量得出长度。
+  要求两种选法都能拿到分支长度。
+- 做法：`_branch_index(item)` 解析出分支号后**不再量选中对象**，而是去该叶子零件的
+  CATPart 里 `part.find_object_by_name(f"ElecCurve.{N}")` 找到中心线，再
+  `SPAWorkbench(part_doc).get_measurable(part.create_reference_from_object(curve)).length`。
+  拿不到分支号（纯树选中）或量不出 → 退回原来的「直接量选中对象」，行为不变。
+- 零件文档取法：`item.LeafProduct.ReferenceProduct.Parent` 就是该叶子的 CATPart
+  （同一用法在 `_items_to_entries` 里逐实例 STEP 导出已验证可靠）。
+- 多根分支按分支号**去重后相加**；`parts[]` 契约没变（仍是「同名实例合并成一项」）。
+- 单位 **mm**，不用换算。
+
+## 无人工点击地端到端测「selection 驱动」的接口（可复用）
+- `part.create_reference_from_b_rep_name(label, part)` + `Selection.Add(ref)` 能把
+  某个面**还原成引用塞进选择集**，等价于用户点了那个面 → 不用人在 CATIA 里点。
+- label 就是真实拾取时 `Value.Name` 里的面包屑：去掉 `Selection_RSur:` 前缀，
+  **保留**结尾的 `;EhiBundleSegmentRib.2_ResultOUT;Z0;G3563`。留不留尾巴都能命中。
+- ⚠️ `Selection.Add` 必须**走 pycatia 包装** `Selection(sel).add(ref)`（内部取 `.com_object`）；
+  直接对原始 CDispatch 调 `sel.add(ref)` 会报 `must be real number, not Reference`，
+  `Add2` 报 `<unknown>.Add2`。
+- 程序化加入的引用 `Value.Name` = `CATIAReferenceNN`（自动名），所以 `_branch_index`
+  得靠 `DisplayName` 兜底才认得出来 —— 这也正是我为它加这一档的原因。
+- 会话：CATIA 没在跑时 `win32com.client.Dispatch("CATIA.Application")` 能直接拉起。
+  探测脚本：`_probe_branch_curve.py`（dump 零件内部 Body/HybridBody/HybridShape + 逐个量长度）。
 
 ## 本机工具环境坑（踩坑，重要）
 - **PowerShell 工具的 stdout 经常被吞掉**：命令看似成功但没输出。统一「结果写文件 → 用 Read 读」。

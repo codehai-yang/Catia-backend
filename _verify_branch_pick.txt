@@ -1,0 +1,20 @@
+active document = cable example.CATProduct
+
+--- 模拟点第 1 根分支的表皮 ---
+  Count2=1  Value.Name=CATIAReference23
+  解析出的分支号 = 1（期望 1）
+  /getselected 响应 = {"assemblyName": "cable example", "totalLength": 175.002, "parts": [{"name": "多分支1.1", "length": 175.002}]}
+  -> OK  length=175.002（期望 ≈175.002）
+
+--- 模拟点第 2 根分支的表皮 ---
+  Count2=1  Value.Name=CATIAReference24
+  解析出的分支号 = 2（期望 2）
+  /getselected 响应 = {"assemblyName": "cable example", "totalLength": 245.359, "parts": [{"name": "多分支1.1", "length": 245.359}]}
+  -> OK  length=245.359（期望 ≈245.359）
+
+--- 附带回归：/getglb 仍按分支裁剪（第 2 根分支）---
+  parts=[{"id": "多分支1.1#2", "instanceName": "多分支1.1#2", "branch": 2, "partNumber": "多分支1"}]  branches=[2]
+  glb size = 211000 bytes  filename = 多分支1.1
+  -> OK
+
+=== 结论：全部通过；选择集已清空 ===
