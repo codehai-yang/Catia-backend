@@ -163,19 +163,41 @@ def split_branch_geometry(
         return []
 
     chosen: set[int] = set()
-    if pick_points:
-        for point in pick_points:
-            best_index, best_dist = -1, float("inf")
-            for i, solid in enumerate(solids):
-                d = _distance_to_point(solid, point)
-                if d < best_dist:
-                    best_index, best_dist = i, d
-            if best_index >= 0:
-                chosen.add(best_index)
-    if not chosen:
-        for b in branches:
-            if 1 <= b <= len(solids):
-                chosen.add(b - 1)
+    # 1) 分支序号：STEP 里的实体顺序与 CATIA 分支号严格一致，语义最直接。
+    from_branch: set[int] = set()
+    for b in branches:
+        if 1 <= b <= len(solids):
+            from_branch.add(b - 1)
+    chosen |= from_branch
+    # 2) 3D 拾取点做几何判定（点到实体距离最小者胜出）。
+    #    只作为**补充**与分支序号取并集，而不是覆盖它——两路任一方失灵都不会漏掉分支。
+    from_pick: set[int] = set()
+    for point in pick_points:
+        best_index, best_dist = -1, float("inf")
+        for i, solid in enumerate(solids):
+            d = _distance_to_point(solid, point)
+            if d < best_dist:
+                best_index, best_dist = i, d
+        if best_index >= 0:
+            from_pick.add(best_index)
+    chosen |= from_pick
+
+    if from_branch or from_pick:
+        logger.info(
+            "split_branch_geometry: branches={} -> solid(s) {}; {} pick point(s) -> solid(s) {}; solids={}",
+            branches,
+            sorted(i + 1 for i in from_branch),
+            len(pick_points),
+            sorted(i + 1 for i in from_pick),
+            len(solids),
+        )
+        if from_pick and from_branch and from_pick != from_branch:
+            logger.warning(
+                "branch/pick mismatch: branches={} -> {}, pick points -> {}",
+                branches,
+                sorted(i + 1 for i in from_branch),
+                sorted(i + 1 for i in from_pick),
+            )
 
     if not chosen:
         logger.warning(

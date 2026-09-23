@@ -225,7 +225,8 @@ class CatiaService:
 
         # 按叶子零件分组（保持选择顺序）。每个零件只吃自己的分支过滤，避免互相误裁：
         # 卡扣上的那次面点击不能拿去裁线束，反之亦然。
-        groups: dict[str, list[Any]] = {}
+        # 这里只记索引、不长期持有 SelectedElement 对象——见 _pick_point 的说明。
+        groups: dict[str, list[int]] = {}
         for i in indices:
             try:
                 item = selection.Item2(i)
@@ -233,7 +234,7 @@ class CatiaService:
             except Exception as exc:
                 logger.info("selection item {} unusable: {}", i, exc)
                 continue
-            groups.setdefault(leaf_name, []).append(item)
+            groups.setdefault(leaf_name, []).append(i)
 
         if not groups:
             raise CatiaError(StatusCode.VALIDATION_ERROR, "选中的对象无法导出")
@@ -241,8 +242,10 @@ class CatiaService:
         with tempfile.TemporaryDirectory() as tmp_dir:
             entries: list[tuple[str, list[list[float]] | None, str, list[int], list]] = []
             products: dict[str, Any] = {}
-            for seq, (leaf_name, items) in enumerate(groups.items()):
-                group_entries, group_products = self._items_to_entries(tmp_dir, items, seq)
+            for seq, (leaf_name, idxs) in enumerate(groups.items()):
+                group_entries, group_products = self._items_to_entries(
+                    tmp_dir, selection, idxs, seq
+                )
                 if not group_entries:
                     continue
                 entries.extend(group_entries)
@@ -289,10 +292,14 @@ class CatiaService:
 
     @staticmethod
     def _pick_point(item: Any) -> tuple[float, float, float] | None:
-        """取 3D 视图内的拾取点（总成坐标）。非几何拾取时返回 None。"""
+        """取 3D 视图内的拾取点（总成坐标）。非几何拾取时返回 None。
+
+        ⚠️ 调用方必须传入「刚从 ``selection.Item2(i)`` 取出来的」对象：
+        坐标读取依赖 CATIA 当前的拾取状态，如果先批量取出多个 SelectedElement
+        再逐个读坐标，它们会**统一返回最后一项的坐标**（实测：选两根分支拿到两个
+        完全相同的点），进而让多选退化只导出一根分支。
+        """
         try:
-            if str(item.Type) == "Product":
-                return None
             coords = SelectedElement(item).get_coordinates()
             point = (float(coords[0]), float(coords[1]), float(coords[2]))
         except Exception:
@@ -300,23 +307,41 @@ class CatiaService:
         # 非几何选择的兜底值是 (0, 0, 0)，不能当成有效拾取点
         if point == (0.0, 0.0, 0.0):
             return None
+        try:
+            if str(item.Type) == "Product":
+                return None
+        except Exception:
+            pass
         return point
 
     def _branch_selection(
-        self, items: list[Any]
+        self, selection: Any, indexes: list[int]
     ) -> tuple[list[int], list[tuple[float, float, float]]]:
         """收集**同一个叶子零件**下这些选中项里的分支序号与 3D 拾取点。
 
         支持用户一次选中多个断开的分支（多选），返回它们的并集。
+
+        注意：这里必须**逐个** ``selection.Item2(i)`` 后立即读取，不能先批量取好
+        item 列表再遍历（原因见 :meth:`_pick_point`）。
         """
         branches: list[int] = []
         points: list[tuple[float, float, float]] = []
-        for item in items:
+        for i in indexes:
+            try:
+                item = selection.Item2(i)
+            except Exception as exc:
+                logger.info("selection item {} unusable: {}", i, exc)
+                continue
             index = self._branch_index(item)
             if index is not None and index not in branches:
                 branches.append(index)
+            # 重新取一次再**立刻**读坐标，保证取到的是这一项的拾取点
+            try:
+                item = selection.Item2(i)
+            except Exception:
+                continue
             point = self._pick_point(item)
-            if point is not None:
+            if point is not None and point not in points:
                 points.append(point)
         return branches, points
 
@@ -338,14 +363,20 @@ class CatiaService:
     # 把一个叶子零件（或子装配）的选中项转成待导出的 STEP 条目。
     # 首选递归收集其子树下所有引用 CATPart 的叶子实例——这样「卡扣装配」这类自身无实体的
     # 子装配也能正确导出；退化时才直接导出该零件自己的引用文档。
+    # 只接收选中项的**索引**，需要时现取现用（避免持有过期的 SelectedElement）。
     # 返回 (entries, products)；entries 元素 = (step_path, matrix|None, 实例名, 分支号, 拾取点)
     def _items_to_entries(
-        self, tmp_dir: str | Path, items: list[Any], seq: int
+        self, tmp_dir: str | Path, selection: Any, indexes: list[int], seq: int
     ) -> tuple[
         list[tuple[str, list[list[float]] | None, str, list[int], list]], dict[str, Any]
     ]:
-        leaf_name = str(items[0].LeafProduct.Name) or "selected"
-        branches, pick_points = self._branch_selection(items)
+        try:
+            first = selection.Item2(indexes[0])
+        except Exception as exc:
+            logger.info("selection item {} unusable: {}", indexes[0], exc)
+            return [], {}
+        leaf_name = str(first.LeafProduct.Name) or "selected"
+        branches, pick_points = self._branch_selection(selection, indexes)
         # 只有识别到电气分支特征时才按分支裁剪：普通零件（卡扣、支架…）上的一次面点击
         # 不该把这个零件裁成「离点击点最近的那个实体」。
         if pick_points and not branches:
@@ -362,7 +393,7 @@ class CatiaService:
         leaf_product: Any = None
         instances: list[tuple[list[list[float]], Any]] = []
         try:
-            leaf_product = Product(items[0].LeafProduct)
+            leaf_product = Product(first.LeafProduct)
             instances = self._collect_part_transforms(leaf_product, _identity_matrix())
         except Exception as exc:
             logger.info("{} failed to collect part instances: {}", leaf_name, exc)
@@ -371,7 +402,7 @@ class CatiaService:
             # 回退：独立零件实例（有独立 .CATPart 引用文档）直接导出该引用文档，
             # 只会包含这一个零件
             try:
-                ref_doc = items[0].Value.ReferenceProduct.Parent
+                ref_doc = first.Value.ReferenceProduct.Parent
             except Exception:
                 ref_doc = None
             if ref_doc is None or not self._is_part_document(ref_doc):

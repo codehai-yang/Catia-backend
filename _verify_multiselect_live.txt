@@ -1,0 +1,23 @@
+document = cable example.CATProduct
+Count2   = 2
+
+=== 1) 逐项原始信息 ===
+  item 1: Type=Face  leaf=多分支1.1
+           name=Selection_RSur:(Face:(Brp:(EhiBundleSegmentRib.3;0:(Brp:(ElecCurve.3;2);Brp:(GSMCircle.3;(
+           branch=3  pick=(-47.18183135986328, 265.1450500488281, 76.97294616699219)
+  item 2: Type=Face  leaf=多分支1.1
+           name=Selection_RSur:(Face:(Brp:(EhiBundleSegmentRib.2;0:(Brp:(ElecCurve.2;1);Brp:(GSMCircle.2;(
+           branch=2  pick=(-33.30913543701172, 182.12677001953125, 47.4976921081543)
+
+=== 2) _branch_selection 汇总（逐项取，坐标应各不相同）===
+  ([3, 2], [(-47.18183135986328, 265.1450500488281, 76.97294616699219), (-33.30913543701172, 182.12677001953125, 47.4976921081543)])
+
+=== 3) 真实 get_glb()（默认导出全部选中项）===
+  filename = 多分支1.1
+  branches = [2, 3]
+  parts    = [{"id": "多分支1.1#2", "instanceName": "多分支1.1#2", "branch": 2, "partNumber": "多分支1"}, {"id": "多分支1.1#3", "instanceName": "多分支1.1#3", "branch": 3, "partNumber": "多分支1"}]
+  size     = 402188 bytes
+  nodes    = ['多分支1.1#2', '多分支1.1#3']
+  meshes   = 2
+  parts[].id == nodes ? True
+  saved -> E:\office\CatiaProject\_verify_multiselect_live.glb

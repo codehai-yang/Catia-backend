@@ -110,11 +110,18 @@ cable example.CATProduct
   Brp:(GSMCircle.2;...))));...)`，其中的数字即分支号（正则见 service 的 `_BRANCH_NAME_PATTERN`）。
 - **3D 拾取点**：`SelectedElement(item).get_coordinates()` 给出总成坐标的拾取点。
   `Type == "Product"` 或坐标为 `(0,0,0)` 时视为无效（非几何选择的兜底值）。
+- ⚠️ **多选时不能批量预取 `SelectedElement`**：`GetCoordinates()` 依赖 CATIA **当前拾取状态**。
+  先把 `selection.Item2(i)` 批量取成列表、之后再逐个读坐标 → **全部返回最后一项的坐标**
+  （实测：多选两根分支拿到两个完全相同的点），于是多选退化成只导出最后一根
+  （症状：`branches` 只有一项）。必须「取一个 → 立刻读坐标」：
+  `get_glb` 分组只存**索引**，`_branch_selection(selection, indexes)` 与
+  `_items_to_entries(tmp_dir, selection, indexes, seq)` 内部逐个 `selection.Item2(i)` 现取现用。
 - **STEP 实体顺序 = 分支号**：整体导出的 STEP 里 4 个 `MANIFOLD_SOLID_BREP`
   名为 `几何体.1..4`；用真实拾取点验证，点 `Rib.N` 到第 N 个实体距离**恰好 0.0000**，
   到其它实体 ≥51 → 顺序严格对应，可作为裁剪依据。
-- **裁剪优先级**：拾取点几何判定（`BRepExtrema_DistShapeShape`）> 分支序号；两者都没有则保留整零件。
-  多选多个分支时，序号/拾取点取并集，**每根命中的分支各写一个独立节点**。
+- **裁剪判定**：`branches`（按实体序号）与 `pick_points`（`BRepExtrema_DistShapeShape`
+  找最近实体）**取并集**——任一路失灵都不会漏分支；两路结果不一致会打 warning。
+  两者都没有则保留整零件。多选 N 根 → 每根各写一个独立命名节点。
 - **可复跑的回归基准**（`_tmp_branch/baseline_full.stp`，同一次导出）：整根 21947 顶点；
   单根 `#1=4305`、`#2=5823`、`#4=6410`；`[1,2]=10128`、`[1,4]=10715`（精确相加，说明分割无漏无重）。
 - 注意：`read_step_file_with_names_colors()` 只给到 `多分支1` 一层（XDE 不把 4 个实体当命名节点），
