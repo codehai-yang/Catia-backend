@@ -27,16 +27,17 @@ def list_parts() -> ApiResponse[list[PartItem]]:
 def select_part(partName: str = Body(...)) -> ApiResponse[list[PartItem]]:
     return ApiResponse(data=catia_service.select_part(partName))
 
-# 获取glTF/GLB文件（当前选中项中的第 index 个，默认第 1 个）
+# 获取glTF/GLB文件：**默认导出全部选中项**（可跨零件，如线束分支 + 卡扣一起返回）。
+# index 不传 / 传 0 = 全部；传 index >= 1 = 只导出第 index 个选中项（兼容旧调用）。
 # 返回 JSON：节点清单（含唯一标识 id）+ 模型本体（base64）。前端用 parts[].id
 # 与 GLB 里的节点名(node.name) 对齐，即可在数模上按实例名高亮。
 # 选中的是线束且选了多根分支时，parts 里每根分支各一项（id 形如 多分支1.1#4）。
 @router.post(
     "/getglb",
     response_model=ApiResponse[GlbPayload],
-    summary="Export GLB of the selected item, with part instance names",
+    summary="Export GLB of the selected item(s), with part instance names",
 )
-def get_gltf(index: int = Body(1)) -> ApiResponse[GlbPayload]:
+def get_gltf(index: int = Body(0)) -> ApiResponse[GlbPayload]:
     data, name, parts, branches = catia_service.get_glb(index=index)
     return ApiResponse(
         data=GlbPayload(

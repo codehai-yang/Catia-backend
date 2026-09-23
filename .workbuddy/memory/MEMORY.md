@@ -20,6 +20,25 @@
   导出函数返回 `list[ExportedNode]`，service 用 `_nodes_to_parts()` 把它转成 `parts`，
   用 `_branches_of()` 得出**实际**导出的分支号。旧的 `select_branch_geometry()`（合并版）保留兼容。
 - 命名规则集中在 `step_to_gltf.branch_node_name()` + `BRANCH_SEP = "#"`，要换格式只改这一处。
+- **`/getglb` 默认导出「全部选中项」**（`index` 不传 / 传 0），可**跨零件**——线束分支 + 卡扣
+  会合成到同一个 GLB；传 `index >= 1` 时只导第 index 个选中项（兼容旧调用）。
+  前端目前**不传 index**，所以这条默认值就是它的实际行为。
+- service 侧按 `LeafProduct.Name` **分组**（保持选择顺序），每组只吃自己的分支过滤，
+  各组的 STEP 条目汇总后**一次** `steps_to_gltf` 写出，避免跨零件误裁。
+
+## 裁剪切入口（容易踩的坑）
+- **只有识别到电气分支特征**（`_BRANCH_NAME_PATTERN` 命中 `EhiBundleSegmentRib|ElecCurve|GSMCircle`）
+  才把 `branches`/`pick_points` 传给导出层；**仅有点击点、没有分支号时一律丢弃**。
+- 否则普通零件（卡扣、支架…）上的一次面点击会被当成"分支配对"，把零件裁成
+  「离点击点最近的那个实体」，并把节点名变成 `clipA.2#1`、多出一个假的 `branch: 1`。
+  卡扣恰好只有 1 个实体时结果看似正确，但节点名已经错了。
+
+## 变换链现状（已知限制）
+- `_collect_part_transforms()` 从**选中节点自己**起算（父矩阵 = 单位阵），**不含祖先位姿**。
+- 本例（cable example）实测 `Clips ASSY` / `Harness ASSY` / 根节点位移全为 0，
+  所以真实全局 == 本级 own，误差 0，跨零件合并不会错位。
+- 若将来遇到**带位移的子装配**，跨零件（或单零件）导出都会错位。修法：从
+  `ProductDocument(doc).product` 往下走、累积祖先矩阵（`list_position()` 已有同样的遍历可参考）。
 
 ## OCC (pythonocc) 踩坑记录
 - `TDataStd_Name.Set(label, name)`：`name` **必须传 Python `str`**。传 `TCollection_ExtendedString`

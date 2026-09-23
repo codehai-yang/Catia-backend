@@ -13,7 +13,7 @@ from pycatia.space_analyses_interfaces.spa_workbench import SPAWorkbench
 from pycatia.product_structure_interfaces.product import Product
 from pycatia.product_structure_interfaces.product_document import ProductDocument
 from pycatia.in_interfaces.selected_element import SelectedElement
-from app.utils.step_to_gltf import ExportedNode, step_to_gltf, steps_to_gltf
+from app.utils.step_to_gltf import ExportedNode, steps_to_gltf
 
 # 线束分支在 CATIA 里的特征名，形如 EhiBundleSegmentRib.2（树里显示为 肋.2 / 分支.2），
 # 其电气路径是 ElecCurve.2 / GSMCircle.2。数字即分支序号，与导出 STEP 后的实体顺序一致。
@@ -187,12 +187,14 @@ class CatiaService:
                 return parts
         return []
 
-    # 获取glTF文件：导出当前选中项中的第 index 个（默认第 1 个）的数模，而非其父级文档。
+    # 获取glTF文件：导出当前选中项。
+    # **默认（index <= 0）导出全部选中项**，可以跨零件——例如线束的一根分支 + 一个卡扣
+    # 会一起合成到同一个 GLB；传 index >= 1 时只导出第 index 个选中项（兼容旧调用）。
     # 返回 (glb 字节, 文件名, 节点清单, 实际导出的分支序号)；节点清单里每一项都带唯一标识
     # （= GLB 节点名），线束选多根分支时每根分支各占一项（如 多分支1.1#1、多分支1.1#4），
     # 前端据此在数模上按实例名做高亮。
     def get_glb(
-        self, index: int = 1
+        self, index: int = 0
     ) -> tuple[bytes, str, list[dict[str, Any]], list[int]]:
         app = self._connect()
         document = app.ActiveDocument
@@ -205,61 +207,55 @@ class CatiaService:
             raise CatiaError(
                 StatusCode.VALIDATION_ERROR, "请先在 CATIA 中选中至少一个零件/分支"
             )
-        if index < 1 or index > count:
+        if index > count:
             raise CatiaError(
                 StatusCode.VALIDATION_ERROR,
-                f"选中项索引 {index} 需在 1..{count} 之间",
+                f"选中项索引 {index} 需在 0..{count} 之间（0 = 全部）",
             )
 
-        selected = selection.Item2(index)
-        instance_name: str = selected.LeafProduct.Name or "selected"
-        val = selected.Value
+        indices = range(1, count + 1) if index <= 0 else (index,)
 
-        # 线束类零件：一根线束的多个分支几何装在同一个 CATPart 里，整体导出只会得到
-        # 「整根线束」。这里从选中项里取出分支序号与 3D 拾取点，交给导出层裁剪；
-        # 用户多选了几个断开的分支时，序号/拾取点会一并收集，导出这几个分支的并集。
-        branches, pick_points = self._branch_selection(selection, count, instance_name)
-        if branches or pick_points:
-            logger.info(
-                "index={} branch filter: branches={} pick_points={}",
-                index,
-                branches,
-                pick_points,
-            )
+        # 按叶子零件分组（保持选择顺序）。每个零件只吃自己的分支过滤，避免互相误裁：
+        # 卡扣上的那次面点击不能拿去裁线束，反之亦然。
+        groups: dict[str, list[Any]] = {}
+        for i in indices:
+            try:
+                item = selection.Item2(i)
+                leaf_name = str(item.LeafProduct.Name) or "selected"
+            except Exception as exc:
+                logger.info("selection item {} unusable: {}", i, exc)
+                continue
+            groups.setdefault(leaf_name, []).append(item)
 
-        # 首选：递归收集选中 Product 子树下所有引用 CATPart 的叶子实例，逐个导出其
-        # 引用文档的 STEP，再按各自实例位姿合成一个 GLB。这样既不会带上整个线束文档，
-        # 也能正确处理「卡扣装配」这类子装配（其自身无实体，实体都在叶子 CATPart 里）。
-        leaf_product: Any = None
-        try:
-            leaf_product = Product(selected.LeafProduct)
-            instances = self._collect_part_transforms(leaf_product, _identity_matrix())
-        except Exception as exc:
-            logger.info("index={} failed to collect part instances: {}", index, exc)
-            instances = []
-        if instances:
-            logger.info("index={} exporting {} leaf part instance(s)", index, len(instances))
-            return self._export_instances_to_glb(
-                instances, instance_name, branches, pick_points
-            )
+        if not groups:
+            raise CatiaError(StatusCode.VALIDATION_ERROR, "选中的对象无法导出")
 
-        # 回退：独立零件实例（有独立 .CATPart 引用文档）直接导出该引用文档，只会包含这一个零件
-        try:
-            ref_doc = val.ReferenceProduct.Parent
-        except Exception:
-            ref_doc = None
-        if ref_doc is not None and self._is_part_document(ref_doc):
-            logger.info(
-                "index={} fallback export ref doc Name={} FullName={}",
-                index,
-                getattr(ref_doc, "Name", None),
-                getattr(ref_doc, "FullName", None),
-            )
-            return self._export_reference_to_glb(
-                ref_doc, instance_name, leaf_product, branches, pick_points
-            )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            entries: list[tuple[str, list[list[float]] | None, str, list[int], list]] = []
+            products: dict[str, Any] = {}
+            for seq, (leaf_name, items) in enumerate(groups.items()):
+                group_entries, group_products = self._items_to_entries(tmp_dir, items, seq)
+                if not group_entries:
+                    continue
+                entries.extend(group_entries)
+                products.update(group_products)
+                logger.info(
+                    "group {} -> {} entry(ies) {}",
+                    leaf_name,
+                    len(group_entries),
+                    [entry[2] for entry in group_entries],
+                )
 
-        raise CatiaError(StatusCode.VALIDATION_ERROR, f"无法导出选中对象 {instance_name}")
+            if not entries:
+                raise CatiaError(
+                    StatusCode.VALIDATION_ERROR, "选中的对象无法导出（未收集到任何零件）"
+                )
+
+            filename = next(iter(groups))
+            glb_path = Path(tmp_dir) / f"{filename}.glb"
+            nodes = steps_to_gltf(entries, str(glb_path))
+            parts = self._nodes_to_parts(nodes, products)
+            return glb_path.read_bytes(), filename, parts, _branches_of(nodes)
 
     @staticmethod
     def _branch_index(item: Any) -> int | None:
@@ -299,22 +295,15 @@ class CatiaService:
         return point
 
     def _branch_selection(
-        self, selection: Any, count: int, leaf_name: str
+        self, items: list[Any]
     ) -> tuple[list[int], list[tuple[float, float, float]]]:
-        """收集与目标叶子零件同属一个文档的选中项里的分支序号与拾取点。
+        """收集**同一个叶子零件**下这些选中项里的分支序号与 3D 拾取点。
 
         支持用户一次选中多个断开的分支（多选），返回它们的并集。
         """
         branches: list[int] = []
         points: list[tuple[float, float, float]] = []
-        for i in range(1, count + 1):
-            try:
-                item = selection.Item2(i)
-                item_leaf = str(item.LeafProduct.Name)
-            except Exception:
-                continue
-            if item_leaf != leaf_name:
-                continue
+        for item in items:
             index = self._branch_index(item)
             if index is not None and index not in branches:
                 branches.append(index)
@@ -338,30 +327,79 @@ class CatiaService:
             for node in nodes
         ]
 
-    # 独立零件实例：直接导出其引用文档
-    def _export_reference_to_glb(
-        self,
-        ref_doc: Any,
-        name: str,
-        product: Any = None,
-        branches: list[int] | None = None,
-        pick_points: list[tuple[float, float, float]] | None = None,
-    ) -> tuple[bytes, str, list[dict[str, Any]], list[int]]:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            step_path = Path(tmp_dir) / f"{name}.stp"
-            glb_path = Path(tmp_dir) / f"{name}.glb"
-            ref_doc.ExportData(str(step_path), "stp")
-            # name 即零件实例名，写进 glTF 节点名供前端高亮；
-            # branches/pick_points 让导出层按分支拆分：每根分支一个独立命名节点（线束场景）
-            nodes = step_to_gltf(
-                str(step_path),
-                str(glb_path),
-                name=name,
-                branches=branches,
-                pick_points=pick_points,
+    # 把一个叶子零件（或子装配）的选中项转成待导出的 STEP 条目。
+    # 首选递归收集其子树下所有引用 CATPart 的叶子实例——这样「卡扣装配」这类自身无实体的
+    # 子装配也能正确导出；退化时才直接导出该零件自己的引用文档。
+    # 返回 (entries, products)；entries 元素 = (step_path, matrix|None, 实例名, 分支号, 拾取点)
+    def _items_to_entries(
+        self, tmp_dir: str | Path, items: list[Any], seq: int
+    ) -> tuple[
+        list[tuple[str, list[list[float]] | None, str, list[int], list]], dict[str, Any]
+    ]:
+        leaf_name = str(items[0].LeafProduct.Name) or "selected"
+        branches, pick_points = self._branch_selection(items)
+        # 只有识别到电气分支特征时才按分支裁剪：普通零件（卡扣、支架…）上的一次面点击
+        # 不该把这个零件裁成「离点击点最近的那个实体」。
+        if pick_points and not branches:
+            logger.info("{}: 有几何拾取但未识别到分支特征，按整零件导出", leaf_name)
+            pick_points = []
+        if branches:
+            logger.info(
+                "{}: branch filter branches={} pick_points={}",
+                leaf_name,
+                branches,
+                pick_points,
             )
-            parts = self._nodes_to_parts(nodes, {name: product})
-            return glb_path.read_bytes(), name, parts, _branches_of(nodes)
+
+        leaf_product: Any = None
+        instances: list[tuple[list[list[float]], Any]] = []
+        try:
+            leaf_product = Product(items[0].LeafProduct)
+            instances = self._collect_part_transforms(leaf_product, _identity_matrix())
+        except Exception as exc:
+            logger.info("{} failed to collect part instances: {}", leaf_name, exc)
+
+        if not instances:
+            # 回退：独立零件实例（有独立 .CATPart 引用文档）直接导出该引用文档，
+            # 只会包含这一个零件
+            try:
+                ref_doc = items[0].Value.ReferenceProduct.Parent
+            except Exception:
+                ref_doc = None
+            if ref_doc is None or not self._is_part_document(ref_doc):
+                logger.warning("{} 无法导出，已跳过", leaf_name)
+                return [], {}
+            step_path = Path(tmp_dir) / f"part_{seq}.stp"
+            ref_doc.ExportData(str(step_path), "stp")
+            logger.info(
+                "{}: fallback export ref doc Name={}",
+                leaf_name,
+                getattr(ref_doc, "Name", None),
+            )
+            return [(str(step_path), None, leaf_name, branches, pick_points)], {
+                leaf_name: leaf_product
+            }
+
+        entries: list[tuple[str, list[list[float]] | None, str, list[int], list]] = []
+        products: dict[str, Any] = {}
+        for k, (matrix, inst) in enumerate(instances):
+            ref_doc = inst.com_object.ReferenceProduct.Parent
+            step_path = Path(tmp_dir) / f"part_{seq}_{k}.stp"
+            ref_doc.ExportData(str(step_path), "stp")
+            instance_name = self._instance_name(inst, k)
+            # 分支过滤只作用于被选中的那个实例，避免误裁同一子树里的其它实例
+            is_target = instance_name == leaf_name
+            entries.append(
+                (
+                    str(step_path),
+                    matrix,
+                    instance_name,
+                    branches if is_target else [],
+                    pick_points if is_target else [],
+                )
+            )
+            products[instance_name] = inst
+        return entries, products
 
     @staticmethod
     def _instance_name(product: Any, index: int) -> str:
@@ -419,41 +457,6 @@ class CatiaService:
             return str(doc.Name).lower().endswith(".catpart")
         except Exception:
             return False
-
-    # 逐个导出叶子零件引用文档的 STEP，按各自实例位姿合成为一个 GLB。
-    # 每个零件在 GLB 里是独立节点，节点名 = CATIA 实例名，前端据此高亮；
-    # 被选中的那个实例若做了分支裁剪，则会拆成「每根分支一个节点」（如 多分支1.1#4）。
-    # branches/pick_points 只作用于被选中的那个实例，避免误裁其它实例。
-    def _export_instances_to_glb(
-        self,
-        instances: list[tuple[list[list[float]], Any]],
-        name: str,
-        branches: list[int] | None = None,
-        pick_points: list[tuple[float, float, float]] | None = None,
-    ) -> tuple[bytes, str, list[dict[str, Any]], list[int]]:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            entries: list[tuple[str, list[list[float]], str, list[int], list]] = []
-            products: dict[str, Any] = {}
-            for i, (matrix, inst) in enumerate(instances):
-                ref_doc = inst.com_object.ReferenceProduct.Parent
-                step_path = Path(tmp_dir) / f"part_{i}.stp"
-                ref_doc.ExportData(str(step_path), "stp")
-                instance_name = self._instance_name(inst, i)
-                is_target = instance_name == name
-                entries.append(
-                    (
-                        str(step_path),
-                        matrix,
-                        instance_name,
-                        list(branches or []) if is_target else [],
-                        list(pick_points or []) if is_target else [],
-                    )
-                )
-                products[instance_name] = inst
-            glb_path = Path(tmp_dir) / f"{name}.glb"
-            nodes = steps_to_gltf(entries, str(glb_path))
-            parts = self._nodes_to_parts(nodes, products)
-            return glb_path.read_bytes(), name, parts, _branches_of(nodes)
 
     # 获取零件位置（递归装配体结构树，返回每个节点的局部/全局位置与旋转）
     def list_position(self, fullName: str) -> list[dict[str, Any]]:
